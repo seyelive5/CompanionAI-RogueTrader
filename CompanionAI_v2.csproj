@@ -52,6 +52,14 @@
       <HintPath>$(ManagedPath)\Owlcat.Runtime.Core.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="Kingmaker.PubSubSystem.Core.Interfaces">
+      <HintPath>$(ManagedPath)\Kingmaker.PubSubSystem.Core.Interfaces.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="StateHasher">
+      <HintPath>$(ManagedPath)\StateHasher.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
 
     <!-- Pathfinding -->
     <Reference Include="AstarPathfindingProject">

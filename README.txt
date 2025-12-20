@@ -68,10 +68,28 @@ ROLES:
 - 저격수: 원거리 전문가, 거리 유지
 
 ================================================================================
-                              Version 2.0.1
+                              Version 2.0.4
 ================================================================================
 
 CHANGELOG:
+
+v2.0.4:
+- Fixed: Psychic Scream now correctly categorized as Attack (was incorrectly Taunt)
+- Fixed: Added Taunt abilities to offensive skill list (enemies only)
+- Fixed: Added minimum score threshold - actions with score below 0 are rejected
+- Improved: Taunt keyword matching more specific to avoid false positives
+
+v2.0.3:
+- Improved: Now uses game's actual hit chance calculation (RuleCalculateHitChances)
+- Changed: Hit chance threshold raised from 30% to 60% for repositioning
+- Improved: AI more aggressively repositions when hit chance is below 60%
+- Fixed: Hit chance display now matches game UI exactly
+
+v2.0.2:
+- Added: Hit chance evaluation for ranged attacks
+- Added: AI now moves to better position when hit chance is too low (<30%)
+- Added: Cover and distance penalties affect attack decisions
+- Improved: Ranged characters prioritize repositioning over low-accuracy shots
 
 v2.0.1:
 - Fixed: Attack skills no longer target allies when enemies are out of range

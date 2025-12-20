@@ -17,6 +17,8 @@ using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
 using Kingmaker.Utility;
 using Kingmaker.View.Covers;
+using Kingmaker.RuleSystem;
+using Kingmaker.RuleSystem.Rules;
 using UnityEngine;
 
 namespace CompanionAI_v2.Patches
@@ -106,6 +108,13 @@ namespace CompanionAI_v2.Patches
         private const float SCORE_AP_EFFICIENCY = 10f;
         private const float SCORE_TAUNT_BONUS = 100f;       // 도발 스킬 보너스
         private const float SCORE_EXPLOIT_BONUS = 50f;      // 약점 공략 보너스
+
+        // 명중률 관련 상수
+        private const float MIN_ACCEPTABLE_HIT_CHANCE = 60f;  // 최소 허용 명중률 (%) - 60% 이하면 이동 고려
+        private const float LOW_HIT_CHANCE_PENALTY = 100f;    // 낮은 명중률 페널티 (더 강한 페널티)
+        private const float COVER_FULL_PENALTY = 40f;         // 완전 엄폐 명중률 감소
+        private const float COVER_HALF_PENALTY = 20f;         // 부분 엄폐 명중률 감소
+        private const float RANGE_PENALTY_PER_TILE = 2f;      // 타일당 거리 명중률 감소
 
         // 아키타입별 어빌리티 키워드
         private static readonly Dictionary<GameArchetype, string[]> ArchetypeAbilityKeywords = new()
@@ -944,8 +953,16 @@ namespace CompanionAI_v2.Patches
 
             // === 게임 특화 키워드 우선 체크 ===
 
+            // 사이킥 공격 스킬 - 도발보다 먼저 체크! (PsychicScream 등)
+            if (ContainsAny(combinedName, "psychicscream", "psychic scream", "사이킥 비명"))
+                return AbilityCategory.Attack;
+
             // 도발 스킬 (Vanguard/Warrior) - 예: FighterTauntingScreamAbility
-            if (ContainsAny(combinedName, "taunt", "provocation", "provoking", "screaming", "scream"))
+            // "scream" 단독은 제외 (PsychicScream과 혼동 방지) - "taunting"이나 "taunt"와 함께 있어야 함
+            if (ContainsAny(combinedName, "taunt", "provocation", "provoking"))
+                return AbilityCategory.Taunt;
+            // tauntingscream 특별 처리
+            if (combinedName.Contains("taunting") && combinedName.Contains("scream"))
                 return AbilityCategory.Taunt;
 
             // 약점 공략 (Operative)
@@ -1281,6 +1298,15 @@ namespace CompanionAI_v2.Patches
             foreach (var (name, category, target, score, bpName) in topScores)
             {
                 Main.LogDebug($"[CustomAI] Score: {name} ({category}, BP:{bpName}) -> {target}: {score:F1}");
+            }
+
+            // === 최소 점수 임계값 체크 ===
+            // 점수가 0 이하인 행동은 선택하지 않음 (아군 공격 등 방지)
+            const float MIN_ACCEPTABLE_ACTION_SCORE = 0f;
+            if (bestScore < MIN_ACCEPTABLE_ACTION_SCORE)
+            {
+                Main.Log($"[CustomAI] REJECTED: Best action has score {bestScore:F0} (below threshold {MIN_ACCEPTABLE_ACTION_SCORE}) - skipping");
+                return (null, null);
             }
 
             return (bestAbility, bestTarget);
@@ -2279,6 +2305,22 @@ namespace CompanionAI_v2.Patches
             }
             catch { }
 
+            // === 원거리 공격 명중률 체크 ===
+            // 명중률이 낮으면 페널티를 주어 이동을 유도
+            if (ability != null && IsRangedAbility(ability))
+            {
+                float hitChance = EstimateHitChance(unit, target, ability);
+
+                if (hitChance < MIN_ACCEPTABLE_HIT_CHANCE)
+                {
+                    // 명중률이 60% 미만이면 페널티 (0%에서 최대, 60%에서 0)
+                    float hitPenalty = LOW_HIT_CHANCE_PENALTY * (1f - hitChance / MIN_ACCEPTABLE_HIT_CHANCE);
+                    score -= hitPenalty;
+                    Main.Log($"[HitChance] LOW HIT CHANCE PENALTY: {ability.Name} -> {target.CharacterName}, " +
+                        $"HitChance: {hitChance:F0}%, Penalty: -{hitPenalty:F0} (should reposition)");
+                }
+            }
+
             return score;
         }
 
@@ -2542,6 +2584,145 @@ namespace CompanionAI_v2.Patches
         }
 
         /// <summary>
+        /// 원거리 공격의 실제 명중률 계산 (0-100)
+        /// 게임의 RuleCalculateHitChances를 사용하여 정확한 값 계산
+        /// </summary>
+        static float EstimateHitChance(BaseUnitEntity attacker, BaseUnitEntity target, AbilityData ability)
+        {
+            try
+            {
+                // 능력이 없으면 주무기 기본 공격으로 계산
+                AbilityData abilityToCheck = ability;
+                if (abilityToCheck == null)
+                {
+                    // 주무기 공격 능력 찾기
+                    var weapon = attacker.Body?.PrimaryHand?.MaybeWeapon;
+                    if (weapon != null)
+                    {
+                        // 무기의 기본 공격 능력 사용
+                        var weaponAbilities = attacker.Abilities?.RawFacts?
+                            .Where(a => a.Data?.SourceItem == weapon)
+                            .Select(a => a.Data)
+                            .FirstOrDefault();
+
+                        if (weaponAbilities != null)
+                        {
+                            abilityToCheck = weaponAbilities;
+                        }
+                    }
+                }
+
+                // 능력이 여전히 없으면 기본값 반환
+                if (abilityToCheck == null)
+                {
+                    Main.LogDebug($"[HitChance] No ability to check for {attacker.CharacterName}");
+                    return 70f;
+                }
+
+                // 게임의 실제 명중률 계산 룰 사용
+                var hitChanceRule = new RuleCalculateHitChances(
+                    attacker,
+                    target,
+                    abilityToCheck,
+                    0,  // burstIndex
+                    attacker.Position,
+                    target.Position
+                );
+
+                // 룰 실행
+                Rulebook.Trigger(hitChanceRule);
+
+                float hitChance = hitChanceRule.ResultHitChance;
+                float distanceFactor = hitChanceRule.DistanceFactor;
+                var coverType = hitChanceRule.ResultLos;
+
+                Main.LogDebug($"[HitChance] GAME CALC: {attacker.CharacterName} -> {target.CharacterName}: " +
+                    $"{hitChance}% (DistFactor: {distanceFactor:F1}, Cover: {coverType}, " +
+                    $"BS: {hitChanceRule.ResultBallisticSkill}, BaseBeforeRecoil: {hitChanceRule.ResultBaseChancesBeforeRecoil})");
+
+                return hitChance;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[HitChance] Error using game calculation: {ex.Message}");
+
+                // 폴백: 기존 추정 방식 사용
+                return EstimateHitChanceFallback(attacker, target);
+            }
+        }
+
+        /// <summary>
+        /// 폴백 명중률 추정 (게임 룰 사용 실패 시)
+        /// </summary>
+        static float EstimateHitChanceFallback(BaseUnitEntity attacker, BaseUnitEntity target)
+        {
+            float baseHitChance = 70f;
+
+            try
+            {
+                float distance = Vector3.Distance(attacker.Position, target.Position);
+
+                // 무기 최적 사거리 확인
+                float maxRange = 20f;
+                try
+                {
+                    var weapon = attacker.Body?.PrimaryHand?.MaybeWeapon;
+                    if (weapon != null)
+                    {
+                        maxRange = weapon.Blueprint?.AttackRange ?? 20f;
+                    }
+                }
+                catch { }
+
+                // 거리 계수 계산 (게임과 동일한 로직)
+                float distanceFactor;
+                if (distance <= maxRange / 2f)
+                {
+                    distanceFactor = 1.0f;  // 최적 거리
+                }
+                else if (distance <= maxRange)
+                {
+                    distanceFactor = 0.5f;  // 장거리
+                }
+                else
+                {
+                    distanceFactor = 0f;    // 사거리 밖
+                }
+
+                baseHitChance = baseHitChance * distanceFactor;
+
+                // 엄폐 체크
+                try
+                {
+                    var los = LosCalculations.GetWarhammerLos(attacker.Position, attacker.SizeRect, target);
+
+                    switch (los.CoverType)
+                    {
+                        case LosCalculations.CoverType.Full:
+                            Main.LogDebug($"[HitChance] Fallback: {target.CharacterName} in FULL cover");
+                            break;
+                        case LosCalculations.CoverType.Half:
+                            Main.LogDebug($"[HitChance] Fallback: {target.CharacterName} in HALF cover");
+                            break;
+                        case LosCalculations.CoverType.Invisible:
+                            baseHitChance = 0f;
+                            Main.LogDebug($"[HitChance] Fallback: {target.CharacterName} INVISIBLE");
+                            break;
+                    }
+                }
+                catch { }
+
+                baseHitChance = Mathf.Clamp(baseHitChance, 0f, 95f);
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[HitChance] Fallback error: {ex.Message}");
+            }
+
+            return baseHitChance;
+        }
+
+        /// <summary>
         /// 대상의 기존 버프 수 계산
         /// </summary>
         static int CountExistingBuffs(BaseUnitEntity target)
@@ -2783,6 +2964,30 @@ namespace CompanionAI_v2.Patches
                     break;
             }
 
+            // === 원거리 공격자의 명중률 기반 이동 판단 ===
+            // 원거리 선호인데 명중률이 낮으면 더 좋은 위치로 이동
+            if (settings.RangePreference == Settings.RangePreference.PreferRanged ||
+                settings.RangePreference == Settings.RangePreference.MaintainRange ||
+                analysis.UnitRole == UnitRole.Sniper)
+            {
+                // 가장 가까운 적에 대한 명중률 체크
+                if (nearestEnemy != null)
+                {
+                    // 현재 장착 무기로 예상 명중률 계산
+                    float estimatedHitChance = EstimateHitChance(unit, nearestEnemy, null);
+
+                    if (estimatedHitChance < MIN_ACCEPTABLE_HIT_CHANCE)
+                    {
+                        // 명중률이 60% 미만이면 이동 점수 상승 (0%에서 최대 보너스)
+                        float moveBonus = (MIN_ACCEPTABLE_HIT_CHANCE - estimatedHitChance) * 2f;
+                        score += moveBonus;
+                        Main.Log($"[Movement] LOW HIT CHANCE - SHOULD REPOSITION: " +
+                            $"{unit.CharacterName} -> {nearestEnemy.CharacterName}, " +
+                            $"Current hit chance: {estimatedHitChance:F0}%, Move bonus: +{moveBonus:F0}");
+                    }
+                }
+            }
+
             // 교전 중인데 이동하면 기회 공격 받을 수 있음
             if (analysis.IsEngaged)
             {
@@ -2961,8 +3166,11 @@ namespace CompanionAI_v2.Patches
                     Main.LogDebug($"[CustomAI] DangerousAoE ability {ability.Name}: skipping self/ally targeting");
                 }
 
-                // 공격/디버프 스킬인지 확인 - 이런 스킬은 아군을 타겟으로 절대 추가하면 안 됨
-                bool isOffensiveAbility = category == AbilityCategory.Attack || category == AbilityCategory.Debuff;
+                // 공격/디버프/도발 스킬인지 확인 - 이런 스킬은 아군을 타겟으로 절대 추가하면 안 됨
+                // Taunt(도발)도 적에게 데미지를 주는 공격 스킬이므로 적만 대상으로 해야 함
+                bool isOffensiveAbility = category == AbilityCategory.Attack ||
+                                          category == AbilityCategory.Debuff ||
+                                          category == AbilityCategory.Taunt;
                 if (isOffensiveAbility)
                 {
                     Main.LogDebug($"[CustomAI] Offensive ability {ability.Name} ({category}): will only target enemies");
