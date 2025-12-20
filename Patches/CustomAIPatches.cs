@@ -2961,8 +2961,15 @@ namespace CompanionAI_v2.Patches
                     Main.LogDebug($"[CustomAI] DangerousAoE ability {ability.Name}: skipping self/ally targeting");
                 }
 
-                // 자기 자신 (DangerousAoE가 아닐 때만)
-                if (blueprint.CanTargetSelf && !isDangerousAoE)
+                // 공격/디버프 스킬인지 확인 - 이런 스킬은 아군을 타겟으로 절대 추가하면 안 됨
+                bool isOffensiveAbility = category == AbilityCategory.Attack || category == AbilityCategory.Debuff;
+                if (isOffensiveAbility)
+                {
+                    Main.LogDebug($"[CustomAI] Offensive ability {ability.Name} ({category}): will only target enemies");
+                }
+
+                // 자기 자신 (DangerousAoE/Offensive가 아닐 때만)
+                if (blueprint.CanTargetSelf && !isDangerousAoE && !isOffensiveAbility)
                 {
                     targets.Add(new TargetWrapper(context.Unit));
                 }
@@ -2976,8 +2983,8 @@ namespace CompanionAI_v2.Patches
                     }
                 }
 
-                // 아군 (DangerousAoE가 아닐 때만)
-                if (blueprint.CanTargetFriends && !isDangerousAoE)
+                // 아군 (DangerousAoE/Offensive가 아닐 때만 - 공격/디버프 스킬은 절대 아군 타겟 불가!)
+                if (blueprint.CanTargetFriends && !isDangerousAoE && !isOffensiveAbility)
                 {
                     foreach (var ally in analysis.Allies)
                     {
@@ -2987,8 +2994,8 @@ namespace CompanionAI_v2.Patches
 
                 // === 특수 케이스: AoE/Self-cast 어빌리티 ===
                 // Taunt, Defense 등 자기 중심 AoE는 자신을 타겟으로 추가
-                // DangerousAoE는 절대 자기 자신을 타겟으로 추가하지 않음!
-                if (targets.Count == 0 && !isDangerousAoE)
+                // DangerousAoE/Offensive 스킬은 절대 자기 자신을 타겟으로 추가하지 않음!
+                if (targets.Count == 0 && !isDangerousAoE && !isOffensiveAbility)
                 {
                     // Personal 범위 어빌리티
                     if (blueprint.Range == AbilityRange.Personal)
@@ -3014,8 +3021,8 @@ namespace CompanionAI_v2.Patches
                         targets.Add(new TargetWrapper(context.Unit));
                         Main.LogDebug($"[CustomAI] Added self as target for Buff ability: {ability.Name}");
                     }
-                    // 블루프린트 이름으로 AoE 판단 (scream, shout, aura 등)
-                    else
+                    // 블루프린트 이름으로 AoE 판단 (scream, shout, aura 등) - 단, Offensive 제외
+                    else if (!isOffensiveAbility)
                     {
                         string bpName = blueprint.name?.ToLower() ?? "";
                         if (ContainsAny(bpName, "scream", "shout", "aura", "aoe", "area", "burst", "nova", "pulse"))
@@ -3025,9 +3032,9 @@ namespace CompanionAI_v2.Patches
                         }
                     }
                 }
-                else if (targets.Count == 0 && isDangerousAoE)
+                else if (targets.Count == 0 && (isDangerousAoE || isOffensiveAbility))
                 {
-                    Main.Log($"[CustomAI] DangerousAoE {ability.Name}: No valid targets found (all blocked due to friendly fire risk)");
+                    Main.Log($"[CustomAI] {(isDangerousAoE ? "DangerousAoE" : "Offensive")} {ability.Name}: No valid targets found");
                 }
             }
             catch (Exception ex)

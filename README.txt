@@ -68,5 +68,20 @@ ROLES:
 - 저격수: 원거리 전문가, 거리 유지
 
 ================================================================================
-                              Version 2.0.0
+                              Version 2.0.1
+================================================================================
+
+CHANGELOG:
+
+v2.0.1:
+- Fixed: Attack skills no longer target allies when enemies are out of range
+- Fixed: Offensive abilities (Attack/Debuff) now correctly only target enemies
+
+v2.0.0:
+- Initial release
+- Complete AI replacement system
+- Role-based behavior (Tank, DPS, Support, Sniper, Hybrid, Balanced)
+- Friendly fire prevention for dangerous AoE abilities
+- Localization support (English/Korean)
+
 ================================================================================
