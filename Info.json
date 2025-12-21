@@ -8,5 +8,5 @@
     "Requirements": [],
     "AssemblyName": "CompanionAI_v2.dll",
     "EntryMethod": "CompanionAI_v2.Main.Load",
-    "HomePage": ""
+    "HomePage": "https://github.com/seyelive5/CompanionAI-RogueTrader"
 }
