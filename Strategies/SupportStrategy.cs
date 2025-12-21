@@ -19,43 +19,21 @@ namespace CompanionAI_v2.Strategies
     {
         public string StrategyName => "Support";
 
-        // 이번 턴에 사용한 버프 추적 (반복 방지)
-        private static HashSet<string> _usedBuffsThisTurn = new HashSet<string>();
+        // ★ v2.1.3: (능력ID + 타겟ID) 조합 추적 - 같은 버프를 다른 타겟에 사용 가능
+        // 시간 기반 리셋 불필요 - 게임 상태가 바뀌면 CanUseAbilityOn이 다시 true 반환
+        private static HashSet<string> _usedAbilityTargetPairs = new HashSet<string>();
         private static string _lastUnitId = null;
-        private static System.DateTime _lastDecisionTime = System.DateTime.MinValue;
-
-        // 새 턴 감지 임계값 (초) - 5초 이상 경과하면 새 턴으로 간주
-        private const double NEW_TURN_THRESHOLD_SECONDS = 5.0;
 
         public ActionDecision DecideAction(ActionContext ctx)
         {
             string unitId = ctx.Unit.UniqueId;
-            var now = System.DateTime.Now;
 
-            // ★ v2.1.2: 새 턴 감지 - 유닛이 바뀌거나 시간이 충분히 경과하면 버프 초기화
-            bool isNewTurn = false;
+            // 유닛이 바뀌면 추적 초기화
             if (_lastUnitId != unitId)
             {
-                isNewTurn = true;
-            }
-            else
-            {
-                // 같은 유닛이라도 시간이 충분히 경과했으면 새 턴
-                double secondsSinceLastDecision = (now - _lastDecisionTime).TotalSeconds;
-                if (secondsSinceLastDecision > NEW_TURN_THRESHOLD_SECONDS)
-                {
-                    isNewTurn = true;
-                    Main.LogDebug($"[Support] New turn detected for {ctx.Unit.CharacterName} ({secondsSinceLastDecision:F1}s since last decision)");
-                }
-            }
-
-            if (isNewTurn)
-            {
-                _usedBuffsThisTurn.Clear();
+                _usedAbilityTargetPairs.Clear();
                 _lastUnitId = unitId;
             }
-
-            _lastDecisionTime = now;
 
             // ★ Veil 및 Momentum 상태 로깅
             int currentVeil = GameAPI.GetCurrentVeil();
@@ -246,25 +224,26 @@ namespace CompanionAI_v2.Strategies
             {
                 if (!GameAPI.IsMomentumGeneratingAbility(ability)) continue;
 
-                // 이미 사용한 스킬은 스킵
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
-                if (_usedBuffsThisTurn.Contains(abilityId)) continue;
-
                 // Veil 안전성 체크
                 if (!IsSafeToUsePsychicAbility(ability)) continue;
 
+                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
+
                 // 타겟 결정 (자신 또는 적 또는 아군)
                 TargetWrapper target = null;
+                string targetId = null;
 
                 // 자신 타겟 스킬 (War Hymn)
                 if (GameAPI.IsSelfTargetAbility(ability))
                 {
                     target = new TargetWrapper(ctx.Unit);
+                    targetId = ctx.Unit.UniqueId;
                 }
                 // 적 타겟 스킬 (Assign Objective)
                 else if (GameAPI.IsOffensiveAbility(ability) && ctx.NearestEnemy != null)
                 {
                     target = new TargetWrapper(ctx.NearestEnemy);
+                    targetId = ctx.NearestEnemy.UniqueId;
                 }
                 // 아군 타겟 스킬 (Inspire, Strongpoint)
                 else if (GameAPI.IsSupportAbility(ability))
@@ -277,15 +256,20 @@ namespace CompanionAI_v2.Strategies
                     if (bestAlly != null)
                     {
                         target = new TargetWrapper(bestAlly);
+                        targetId = bestAlly.UniqueId;
                     }
                 }
 
-                if (target == null) continue;
+                if (target == null || targetId == null) continue;
+
+                // ★ v2.1.3: (능력 + 타겟) 조합으로 중복 체크
+                string pairKey = $"{abilityId}:{targetId}";
+                if (_usedAbilityTargetPairs.Contains(pairKey)) continue;
 
                 string reason;
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    _usedBuffsThisTurn.Add(abilityId);
+                    _usedAbilityTargetPairs.Add(pairKey);
                     string momentumStatus = GameAPI.IsDesperateMeasures() ? "DESPERATE - " : "";
                     Main.Log($"[Support] {momentumStatus}MOMENTUM BOOST: {ability.Name} - Current {GameAPI.GetMomentumStatusString()}");
                     return ActionDecision.UseAbility(ability, target, "Momentum generating ability");
@@ -352,29 +336,31 @@ namespace CompanionAI_v2.Strategies
 
             foreach (var ability in buffAbilities)
             {
-                // ★ 이미 이번 턴에 사용한 버프는 스킵 (반복 방지)
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
-                if (_usedBuffsThisTurn.Contains(abilityId))
-                {
-                    Main.LogDebug($"[Support] Skipping already used buff: {ability.Name}");
-                    continue;
-                }
-
                 // ★ Veil 안전성 체크 (사이킥 능력인 경우)
                 if (!IsSafeToUsePsychicAbility(ability))
                 {
                     continue;
                 }
 
+                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
+
                 foreach (var target in targets)
                 {
+                    // ★ v2.1.3: (능력 + 타겟) 조합으로 중복 체크
+                    string pairKey = $"{abilityId}:{target.UniqueId}";
+                    if (_usedAbilityTargetPairs.Contains(pairKey))
+                    {
+                        Main.LogDebug($"[Support] Skipping already used: {ability.Name} -> {target.CharacterName}");
+                        continue;
+                    }
+
                     var targetWrapper = new TargetWrapper(target);
 
                     string reason;
                     if (GameAPI.CanUseAbilityOn(ability, targetWrapper, out reason))
                     {
-                        // 사용한 버프 기록
-                        _usedBuffsThisTurn.Add(abilityId);
+                        // 사용한 조합 기록
+                        _usedAbilityTargetPairs.Add(pairKey);
                         Main.Log($"[Support] Buff: {ability.Name} -> {target.CharacterName}");
                         return ActionDecision.UseAbility(ability, targetWrapper, $"Buff {target.CharacterName}");
                     }
