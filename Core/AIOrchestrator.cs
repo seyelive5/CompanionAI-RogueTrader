@@ -216,11 +216,10 @@ namespace CompanionAI_v2.Core
 
         /// <summary>
         /// 팩션 기반으로 적/아군 수집
+        /// ★ v2.1.1: IsPlayerEnemy 사용하여 중립 NPC 공격 방지
         /// </summary>
         private static void CollectUnits(BaseUnitEntity unit, ActionContext ctx)
         {
-            bool unitIsPlayer = unit.IsPlayerFaction;
-
             try
             {
                 var allUnits = Game.Instance?.State?.AllBaseAwakeUnits;
@@ -232,17 +231,27 @@ namespace CompanionAI_v2.Core
                     if (other.LifeState.IsDead) continue;
                     if (!other.IsInCombat) continue;
 
-                    bool otherIsPlayer = other.IsPlayerFaction;
-
-                    if (unitIsPlayer == otherIsPlayer)
+                    // ★ 핵심 수정: IsPlayerEnemy로 실제 적대 관계 확인
+                    // IsPlayerFaction만 체크하면 중립 NPC도 적으로 분류됨
+                    if (other.IsPlayerEnemy)
                     {
+                        // 플레이어의 적 -> 적 목록에 추가
+                        ctx.Enemies.Add(other);
+                        Main.LogDebug($"[Orchestrator] Enemy detected: {other.CharacterName} (IsPlayerEnemy=true)");
+                    }
+                    else if (other.IsPlayerFaction)
+                    {
+                        // 플레이어 진영 -> 아군 목록에 추가
                         ctx.Allies.Add(other);
                     }
+                    // 그 외 (중립 NPC)는 적도 아군도 아님 - 무시
                     else
                     {
-                        ctx.Enemies.Add(other);
+                        Main.LogDebug($"[Orchestrator] Neutral unit ignored: {other.CharacterName} (IsPlayerEnemy=false, IsPlayerFaction=false)");
                     }
                 }
+
+                Main.LogDebug($"[Orchestrator] {unit.CharacterName}: Found {ctx.Enemies.Count} enemies, {ctx.Allies.Count} allies");
             }
             catch (Exception ex)
             {

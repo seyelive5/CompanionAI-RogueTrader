@@ -22,16 +22,40 @@ namespace CompanionAI_v2.Strategies
         // 이번 턴에 사용한 버프 추적 (반복 방지)
         private static HashSet<string> _usedBuffsThisTurn = new HashSet<string>();
         private static string _lastUnitId = null;
+        private static System.DateTime _lastDecisionTime = System.DateTime.MinValue;
+
+        // 새 턴 감지 임계값 (초) - 5초 이상 경과하면 새 턴으로 간주
+        private const double NEW_TURN_THRESHOLD_SECONDS = 5.0;
 
         public ActionDecision DecideAction(ActionContext ctx)
         {
-            // 유닛이 바뀌면 버프 추적 초기화
             string unitId = ctx.Unit.UniqueId;
+            var now = System.DateTime.Now;
+
+            // ★ v2.1.2: 새 턴 감지 - 유닛이 바뀌거나 시간이 충분히 경과하면 버프 초기화
+            bool isNewTurn = false;
             if (_lastUnitId != unitId)
+            {
+                isNewTurn = true;
+            }
+            else
+            {
+                // 같은 유닛이라도 시간이 충분히 경과했으면 새 턴
+                double secondsSinceLastDecision = (now - _lastDecisionTime).TotalSeconds;
+                if (secondsSinceLastDecision > NEW_TURN_THRESHOLD_SECONDS)
+                {
+                    isNewTurn = true;
+                    Main.LogDebug($"[Support] New turn detected for {ctx.Unit.CharacterName} ({secondsSinceLastDecision:F1}s since last decision)");
+                }
+            }
+
+            if (isNewTurn)
             {
                 _usedBuffsThisTurn.Clear();
                 _lastUnitId = unitId;
             }
+
+            _lastDecisionTime = now;
 
             // ★ Veil 및 Momentum 상태 로깅
             int currentVeil = GameAPI.GetCurrentVeil();
@@ -146,6 +170,7 @@ namespace CompanionAI_v2.Strategies
         /// <summary>
         /// 무기 공격인지 확인 - 무기 공격은 절대 버프로 사용하면 안됨
         /// 단, 서포트 버프 능력은 제외해야 함
+        /// ★ v2.1.2: 수류탄/폭발물도 공격으로 분류
         /// </summary>
         private bool IsWeaponAttack(AbilityData ability)
         {
@@ -153,6 +178,13 @@ namespace CompanionAI_v2.Strategies
 
             string bpName = ability.Blueprint?.name?.ToLower() ?? "";
             string name = ability.Name?.ToLower() ?? "";
+
+            // ★ v2.1.2: 수류탄/폭발물은 절대 버프가 아님! (최우선 체크)
+            if (IsGrenadeOrExplosive(ability, name, bpName))
+            {
+                Main.LogDebug($"[Support] GRENADE DETECTED: {ability.Name} - treating as attack");
+                return true;  // 공격으로 처리
+            }
 
             // ★ 원뿔형 공격 능력은 절대 버프가 아님! (최우선 체크)
             if (name.Contains("응시") || name.Contains("stare") ||
@@ -587,6 +619,55 @@ namespace CompanionAI_v2.Strategies
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// ★ v2.1.2: 수류탄/폭발물인지 확인
+        /// 수류탄은 아군에게 "던질 수 있지만" 버프가 아님!
+        /// 자신이나 아군을 타겟으로 선택되면 자폭/아군 공격이 됨
+        /// </summary>
+        private bool IsGrenadeOrExplosive(AbilityData ability, string name, string bpName)
+        {
+            // 수류탄 키워드 (한글)
+            if (name.Contains("수류탄") || name.Contains("폭탄") ||
+                name.Contains("화염") || name.Contains("섬광") ||
+                name.Contains("연막") || name.Contains("독가스") ||
+                name.Contains("krak") || name.Contains("frag"))
+                return true;
+
+            // 수류탄 키워드 (영어)
+            if (name.Contains("grenade") || name.Contains("bomb") ||
+                name.Contains("explosive") || name.Contains("molotov") ||
+                name.Contains("incendiary") || name.Contains("flashbang"))
+                return true;
+
+            // 블루프린트 이름 체크
+            if (bpName.Contains("grenade") || bpName.Contains("bomb") ||
+                bpName.Contains("explosive") || bpName.Contains("frag") ||
+                bpName.Contains("krak") || bpName.Contains("incendiary") ||
+                bpName.Contains("throwable") || bpName.Contains("thrown"))
+                return true;
+
+            // CanTargetPoint인 아이템 능력은 높은 확률로 투척물
+            // (무기가 아니면서 위치를 타겟으로 할 수 있는 능력)
+            if (ability.Weapon == null &&
+                ability.Blueprint != null &&
+                ability.Blueprint.CanTargetPoint)
+            {
+                // 명시적 버프 키워드가 없으면 투척물로 간주
+                bool isNotBuff = !name.Contains("heal") && !name.Contains("치유") &&
+                                 !name.Contains("buff") && !name.Contains("강화") &&
+                                 !name.Contains("bless") && !name.Contains("축복") &&
+                                 !name.Contains("protect") && !name.Contains("보호");
+
+                if (isNotBuff)
+                {
+                    Main.LogDebug($"[Support] Suspected throwable (CanTargetPoint + no buff keywords): {ability.Name}");
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         #endregion
