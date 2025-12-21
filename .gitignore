@@ -1,0 +1,43 @@
+# Build output
+bin/
+obj/
+*.dll
+*.pdb
+*.exe
+
+# IDE and editor files
+.vs/
+*.user
+*.suo
+*.csproj.user
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Unity Mod Manager local
+*.bak
+
+# Excel temporary files
+~$*.xlsx
+
+# Development scripts output
+skills.csv
+
+# Development scripts (keep for reference but exclude from release)
+extract*.ps1
+read_*.ps1
+run_extract.ps1
+view-source_*
+
+# Large reference files (keep Excel for reference)
+# Rogue_Trader_Skills.xlsx
