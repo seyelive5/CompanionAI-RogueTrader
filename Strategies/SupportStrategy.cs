@@ -227,7 +227,7 @@ namespace CompanionAI_v2_2.Strategies
             foreach (var ability in ctx.AvailableAbilities)
             {
                 // 수류탄/폭발물 제외
-                if (IsGrenadeOrExplosive(ability)) continue;
+                if (CombatHelpers.IsGrenadeOrExplosive(ability)) continue;
                 // 무기 공격 제외
                 if (IsWeaponAttack(ability)) continue;
                 // 힐 제외
@@ -273,7 +273,7 @@ namespace CompanionAI_v2_2.Strategies
 
             var safeAbilities = ctx.AvailableAbilities
                 .Where(a => !GameAPI.IsMeleeAbility(a))
-                .Where(a => !IsGrenadeOrExplosive(a) || enemies.Count > 0)
+                .Where(a => !CombatHelpers.IsGrenadeOrExplosive(a) || enemies.Count > 0)
                 .OrderBy(a => CombatHelpers.IsAoEAbility(a) ? 1 : 0)
                 .ToList();
 
@@ -345,7 +345,7 @@ namespace CompanionAI_v2_2.Strategies
             string name = ability.Name?.ToLower() ?? "";
 
             // 수류탄/폭발물은 먼저 체크
-            if (IsGrenadeOrExplosive(ability)) return true;
+            if (CombatHelpers.IsGrenadeOrExplosive(ability)) return true;
 
             // 원뿔 공격
             if (name.Contains("응시") || name.Contains("stare") ||
@@ -361,32 +361,6 @@ namespace CompanionAI_v2_2.Strategies
                 bpName.Contains("burstfire") || bpName.Contains("fullburst")) return true;
 
             if (ability.Weapon != null) return true;
-
-            return false;
-        }
-
-        private bool IsGrenadeOrExplosive(AbilityData ability)
-        {
-            if (ability == null) return false;
-
-            string name = ability.Name?.ToLower() ?? "";
-            string bpName = ability.Blueprint?.name?.ToLower() ?? "";
-
-            if (name.Contains("수류탄") || name.Contains("폭탄") ||
-                name.Contains("grenade") || name.Contains("explosive") ||
-                name.Contains("krak") || name.Contains("frag"))
-                return true;
-
-            if (bpName.Contains("grenade") || bpName.Contains("explosive") ||
-                bpName.Contains("throwable") || bpName.Contains("thrown"))
-                return true;
-
-            // CanTargetPoint + 무기 아님 = 투척물 가능성
-            if (ability.Weapon == null && ability.Blueprint?.CanTargetPoint == true)
-            {
-                if (!name.Contains("heal") && !name.Contains("buff") && !name.Contains("bless"))
-                    return true;
-            }
 
             return false;
         }

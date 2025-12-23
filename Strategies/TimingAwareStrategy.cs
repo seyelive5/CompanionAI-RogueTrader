@@ -183,7 +183,6 @@ namespace CompanionAI_v2_2.Strategies
         /// </summary>
         protected ActionDecision TryPostFirstAction(ActionContext ctx)
         {
-            // 첫 행동을 아직 안 했으면 스킵
             if (!ctx.HasPerformedFirstAction) return null;
 
             var postActionAbilities = GameAPI.FilterPostFirstActionAbilities(ctx.AvailableAbilities);
@@ -193,16 +192,13 @@ namespace CompanionAI_v2_2.Strategies
 
             foreach (var ability in postActionAbilities)
             {
-                // 타이밍 체크
                 if (!GameAPI.CanUseAbilityAtCurrentTiming(ability, ctx)) continue;
-
-                // HP 소모 안전성
                 if (!IsSafeHPCostAbility(ctx, ability)) continue;
 
                 string reason;
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    Main.Log($"[{StrategyName}] PostFirstAction: {ability.Name}");
+                    Main.Log($"[{StrategyName}] ★ PostFirstAction SUCCESS: {ability.Name}");
                     return ActionDecision.UseAbility(ability, target, "Post-action ability (Run and Gun, etc.)");
                 }
             }
@@ -313,24 +309,44 @@ namespace CompanionAI_v2_2.Strategies
 
         #region Helpers
 
+        /// <summary>
+        /// 힐 스킬인지 확인
+        /// ★ v2.2.7: GUID 기반 우선, 키워드 폴백
+        /// </summary>
         protected bool IsHealAbility(AbilityData ability)
         {
             if (ability == null) return false;
+
+            // GUID 기반 확인 우선
+            if (AbilityGuids.IsHealing(ability)) return true;
+
+            // 키워드 폴백
             string name = ability.Name?.ToLower() ?? "";
             return name.Contains("heal") || name.Contains("mend") ||
-                   name.Contains("치유") || name.Contains("회복");
+                   name.Contains("medikit") || name.Contains("치유") || name.Contains("회복");
         }
 
         protected List<AbilityData> GetOffensiveAbilities(List<AbilityData> abilities)
         {
-            // ★ v2.2.1: 정렬은 TryAttack에서 상황에 맞게 수행
             return abilities
-                .Where(a => GameAPI.IsOffensiveAbility(a) ||
-                           GameAPI.IsMeleeAbility(a) ||
-                           GameAPI.IsRangedAbility(a))
-                .Where(a => !AbilityRulesDatabase.IsPostFirstAction(a))
-                .Where(a => !AbilityRulesDatabase.IsTurnEnding(a))
-                .Where(a => !AbilityRulesDatabase.IsFinisher(a))
+                .Where(a => (GameAPI.IsOffensiveAbility(a) || GameAPI.IsMeleeAbility(a) || GameAPI.IsRangedAbility(a)) &&
+                           !AbilityRulesDatabase.IsPostFirstAction(a) &&
+                           !AbilityRulesDatabase.IsTurnEnding(a) &&
+                           !AbilityRulesDatabase.IsFinisher(a))
+                .ToList();
+        }
+
+        /// <summary>
+        /// 기본 무기 공격 필터링 (재장전, PostFirstAction, TurnEnding, 수류탄 제외)
+        /// </summary>
+        protected List<AbilityData> GetBasicWeaponAttacks(List<AbilityData> abilities)
+        {
+            return abilities
+                .Where(a => a.Weapon != null &&
+                           a.Blueprint?.CanTargetEnemies == true &&
+                           !AbilityRulesDatabase.IsPostFirstAction(a) &&
+                           !AbilityRulesDatabase.IsTurnEnding(a) &&
+                           !CombatHelpers.IsGrenadeOrExplosive(a))
                 .ToList();
         }
 
@@ -380,70 +396,33 @@ namespace CompanionAI_v2_2.Strategies
         }
 
         /// <summary>
-        /// ★ v2.2.1: Force Basic Attack 폴백
-        /// 모든 스킬이 사용 불가할 때 기본 무기 공격으로 폴백
+        /// Force Basic Attack 폴백 - 모든 스킬이 사용 불가할 때 기본 무기 공격
         /// </summary>
         protected ActionDecision TryForceBasicAttack(ActionContext ctx)
         {
-            // 적이 없으면 스킵
             if (ctx.Enemies.Count == 0) return null;
 
-            // ★ v2.2.2: 디버그 - 사용 가능한 능력 분석
-            var allWeaponAbilities = ctx.AvailableAbilities.Where(a => a.Weapon != null).ToList();
-            Main.LogDebug($"[{StrategyName}] Available abilities: {ctx.AvailableAbilities.Count}, Weapon abilities: {allWeaponAbilities.Count}");
+            var basicAttacks = GetBasicWeaponAttacks(ctx.AvailableAbilities);
+            if (basicAttacks.Count == 0) return null;
 
-            if (allWeaponAbilities.Count == 0)
-            {
-                // 무기 능력이 전혀 없으면 모든 능력 이름 로깅
-                var abilityNames = string.Join(", ", ctx.AvailableAbilities.Take(5).Select(a => a.Name));
-                Main.LogDebug($"[{StrategyName}] No weapon abilities! Sample: {abilityNames}");
-            }
-
-            // 무기 기반 공격 찾기 (PostFirstAction, TurnEnding, 수류탄 제외)
-            var basicAttacks = ctx.AvailableAbilities
-                .Where(a => a.Weapon != null)
-                .Where(a => !AbilityRulesDatabase.IsPostFirstAction(a))
-                .Where(a => !AbilityRulesDatabase.IsTurnEnding(a))
-                .Where(a => !CombatHelpers.IsGrenadeOrExplosive(a)) // ★ 수류탄 제외
-                .ToList();
-
-            if (basicAttacks.Count == 0)
-            {
-                Main.LogDebug($"[{StrategyName}] No basic attack available (after filtering)");
-                return null;
-            }
-
-            // 타겟 찾기 - 가장 가까운 적 우선
             var targets = ctx.Enemies
                 .Where(e => e != null && !e.LifeState.IsDead)
-                .OrderBy(e => GameAPI.GetDistance(ctx.Unit, e))
-                .ToList();
+                .OrderBy(e => GameAPI.GetDistance(ctx.Unit, e));
 
-            // ★ v2.2.2: 각 적에 대한 실패 이유 수집
-            var failReasons = new List<string>();
-
-            foreach (var basicAttack in basicAttacks)
+            foreach (var attack in basicAttacks)
             {
                 foreach (var enemy in targets)
                 {
                     var targetWrapper = new TargetWrapper(enemy);
                     string reason;
-                    if (GameAPI.CanUseAbilityOn(basicAttack, targetWrapper, out reason))
+                    if (GameAPI.CanUseAbilityOn(attack, targetWrapper, out reason))
                     {
-                        Main.Log($"[{StrategyName}] ★ FORCE BASIC ATTACK: {basicAttack.Name} -> {enemy.CharacterName}");
-                        return ActionDecision.UseAbility(basicAttack, targetWrapper,
-                            $"Force basic attack on {enemy.CharacterName}");
-                    }
-                    else
-                    {
-                        failReasons.Add($"{enemy.CharacterName}:{reason}");
+                        Main.Log($"[{StrategyName}] ★ FORCE BASIC ATTACK: {attack.Name} -> {enemy.CharacterName}");
+                        return ActionDecision.UseAbility(attack, targetWrapper, $"Force basic attack on {enemy.CharacterName}");
                     }
                 }
             }
 
-            // 실패 이유 로깅 (최대 3개)
-            var sampleReasons = string.Join(", ", failReasons.Take(3));
-            Main.LogDebug($"[{StrategyName}] Force basic attack failed - {sampleReasons}");
             return null;
         }
 
@@ -456,14 +435,7 @@ namespace CompanionAI_v2_2.Strategies
             if (ctx.Enemies.Count == 0) return null;
             if (!ctx.CanMove) return null; // 이동 불가면 의미 없음
 
-            // 무기 기반 공격 찾기
-            var basicAttacks = ctx.AvailableAbilities
-                .Where(a => a.Weapon != null)
-                .Where(a => !AbilityRulesDatabase.IsPostFirstAction(a))
-                .Where(a => !AbilityRulesDatabase.IsTurnEnding(a))
-                .Where(a => !CombatHelpers.IsGrenadeOrExplosive(a))
-                .ToList();
-
+            var basicAttacks = GetBasicWeaponAttacks(ctx.AvailableAbilities);
             if (basicAttacks.Count == 0) return null;
 
             // 모든 적 시도 (가까운 순)

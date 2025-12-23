@@ -402,9 +402,16 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// PostFirstAction 스킬인지 확인
+        /// ★ v2.2.6: GUID 기반 우선
         /// </summary>
         public static bool IsPostFirstAction(AbilityData ability)
         {
+            if (ability == null) return false;
+
+            // GUID 기반 확인 (가장 정확)
+            if (AbilityGuids.IsPostFirstActionAbility(ability))
+                return true;
+
             return GetTiming(ability) == AbilityTiming.PostFirstAction;
         }
 
@@ -429,9 +436,12 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// 마무리 스킬인지 확인
+        /// ★ GUID 기반 우선
         /// </summary>
         public static bool IsFinisher(AbilityData ability)
         {
+            if (ability == null) return false;
+            if (AbilityGuids.IsFinisher(ability)) return true;
             return GetTiming(ability) == AbilityTiming.Finisher;
         }
 
@@ -439,9 +449,12 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// Heroic Act 스킬인지 확인
+        /// ★ GUID 기반 우선
         /// </summary>
         public static bool IsHeroicAct(AbilityData ability)
         {
+            if (ability == null) return false;
+            if (AbilityGuids.IsHeroicAct(ability)) return true;
             return GetTiming(ability) == AbilityTiming.HeroicAct;
         }
 
@@ -471,9 +484,12 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// 도발 스킬인지 확인
+        /// ★ GUID 기반 우선
         /// </summary>
         public static bool IsTaunt(AbilityData ability)
         {
+            if (ability == null) return false;
+            if (AbilityGuids.IsTaunt(ability)) return true;
             return GetTiming(ability) == AbilityTiming.Taunt;
         }
 

@@ -121,6 +121,7 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// 도발/어그로 스킬 (근접 적 2명 이상일 때)
+        /// ★ v2.2.7: GUID 기반으로 변경
         /// </summary>
         private ActionDecision TryTaunt(ActionContext ctx)
         {
@@ -129,14 +130,8 @@ namespace CompanionAI_v2_2.Strategies
 
             foreach (var ability in ctx.AvailableAbilities)
             {
-                string name = ability.Name?.ToLower() ?? "";
-                string bpName = ability.Blueprint?.name?.ToLower() ?? "";
-
-                // 도발 관련 스킬
-                if (!name.Contains("taunt") && !name.Contains("provoke") &&
-                    !name.Contains("도발") && !name.Contains("어그로") &&
-                    !bpName.Contains("taunt") && !bpName.Contains("provoke"))
-                    continue;
+                // GUID 기반 도발 스킬 확인
+                if (!AbilityGuids.IsTaunt(ability)) continue;
 
                 // 버프 활성 체크
                 if (GameAPI.HasActiveBuff(ctx.Unit, ability))

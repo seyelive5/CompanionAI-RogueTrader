@@ -187,8 +187,7 @@ namespace CompanionAI_v2_2.Strategies
         private BaseUnitEntity FindLowHPEnemy(ActionContext ctx)
         {
             return ctx.Enemies
-                .Where(e => e != null && !e.LifeState.IsDead)
-                .Where(e => GameAPI.GetHPPercent(e) <= 30f)
+                .Where(e => e != null && !e.LifeState.IsDead && GameAPI.GetHPPercent(e) <= 30f)
                 .OrderBy(e => GameAPI.GetHPPercent(e))
                 .FirstOrDefault();
         }
@@ -196,34 +195,16 @@ namespace CompanionAI_v2_2.Strategies
         /// <summary>
         /// ★ v2.2.3: 갭 클로저 스킬 시도 (Death from Above 등)
         /// 적이 멀리 있을 때 점프 공격/돌진 등 사용
+        /// ★ v2.2.7: GUID 기반으로 변경
         /// </summary>
         private ActionDecision TryGapCloser(ActionContext ctx, BaseUnitEntity target)
         {
             if (target == null) return null;
 
-            // 갭 클로저 키워드
-            string[] gapCloserKeywords = {
-                "deathfromabove", "death_from_above", "leapattack", "leap_attack",
-                "pounce", "charge", "lunge", "rush", "jump", "assassin",
-                "점프", "도약", "돌진", "급습", "암살"
-            };
-
             foreach (var ability in ctx.AvailableAbilities)
             {
-                string bpName = ability.Blueprint?.name?.ToLower() ?? "";
-                string name = ability.Name?.ToLower() ?? "";
-
-                bool isGapCloser = false;
-                foreach (var keyword in gapCloserKeywords)
-                {
-                    if (bpName.Contains(keyword) || name.Contains(keyword))
-                    {
-                        isGapCloser = true;
-                        break;
-                    }
-                }
-
-                if (!isGapCloser) continue;
+                // GUID 기반 갭 클로저 확인
+                if (!AbilityGuids.IsGapCloser(ability)) continue;
 
                 // 자기 타겟이 아닌 공격성 스킬
                 if (GameAPI.IsSelfTargetAbility(ability)) continue;
