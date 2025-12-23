@@ -25,23 +25,34 @@ namespace CompanionAI_v2_2.Strategies
         #region Timing Phase Methods
 
         /// <summary>
-        /// Phase 1: 긴급 자기 힐 (HP < 30%)
+        /// Phase 1: 긴급 자기 힐
+        /// ★ v2.2.8: 메디킷 지원 개선 - CanTargetSelf 직접 확인
         /// </summary>
         protected ActionDecision TryEmergencySelfHeal(ActionContext ctx)
         {
-            if (ctx.HPPercent >= 30f) return null;
+            // 설정값 사용 (기본 50%, 긴급 시 30%)
+            float threshold = ctx.Settings?.HealAtHPPercent ?? 50f;
+            float emergencyThreshold = threshold * 0.6f; // 긴급 임계값 (설정의 60%)
+
+            if (ctx.HPPercent >= emergencyThreshold) return null;
 
             var target = new TargetWrapper(ctx.Unit);
 
             foreach (var ability in ctx.AvailableAbilities)
             {
                 if (!IsHealAbility(ability)) continue;
-                if (!GameAPI.IsSelfTargetAbility(ability)) continue;
+
+                // ★ 메디킷 지원: CanTargetSelf 직접 확인 (Range가 Custom이어도 OK)
+                try
+                {
+                    if (!ability.Blueprint.CanTargetSelf) continue;
+                }
+                catch { continue; }
 
                 string reason;
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    Main.Log($"[{StrategyName}] Emergency heal: {ability.Name}");
+                    Main.Log($"[{StrategyName}] Emergency heal: {ability.Name} (HP={ctx.HPPercent:F0}%)");
                     return ActionDecision.UseAbility(ability, target, "Emergency self-heal");
                 }
             }

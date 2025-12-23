@@ -245,6 +245,11 @@ namespace CompanionAI_v2_2.Core
             { "heroicstrike", new AbilityRule(AbilityTiming.HeroicAct, 0f, true, "영웅적 일격") },
             { "heroic_strike", new AbilityRule(AbilityTiming.HeroicAct, 0f, true, "영웅적 일격") },
 
+            // ★ v2.2.8: 블레이드 댄서 죽음 강림 (Death Waltz) - 연속 점프 공격
+            { "reaperdeathwaltz", new AbilityRule(AbilityTiming.HeroicAct, 0f, false, "연속 점프 공격 - Heroic Act") },
+            { "deathwaltz", new AbilityRule(AbilityTiming.HeroicAct, 0f, false, "연속 점프 공격") },
+            { "death_waltz", new AbilityRule(AbilityTiming.HeroicAct, 0f, false, "연속 점프 공격") },
+
             // ========================================
             // ★ v2.2.1 추가: Desperate Measure (Momentum 낮을 때)
             // ========================================
@@ -378,12 +383,95 @@ namespace CompanionAI_v2_2.Core
         }
 
         /// <summary>
-        /// 스킬의 타이밍 조회 (규칙 없으면 Normal 반환)
+        /// 스킬의 타이밍 조회
+        /// ★ v2.2.8: 자동 감지 시스템 추가
+        /// 1. 수동 등록된 규칙 우선
+        /// 2. 등록 안된 스킬은 속성 기반 자동 감지
         /// </summary>
         public static AbilityTiming GetTiming(AbilityData ability)
         {
+            if (ability == null) return AbilityTiming.Normal;
+
+            // 1. 수동 등록된 규칙 우선
             var rule = GetRule(ability);
-            return rule?.Timing ?? AbilityTiming.Normal;
+            if (rule != null) return rule.Timing;
+
+            // 2. 자동 감지: 스킬 속성 기반 타이밍 추론
+            return AutoDetectTiming(ability);
+        }
+
+        /// <summary>
+        /// ★ v2.2.8: 스킬 속성 기반 자동 타이밍 감지
+        /// </summary>
+        private static AbilityTiming AutoDetectTiming(AbilityData ability)
+        {
+            try
+            {
+                var bp = ability.Blueprint;
+                if (bp == null) return AbilityTiming.Normal;
+
+                // 속성 추출
+                bool canTargetSelf = bp.CanTargetSelf;
+                bool canTargetEnemies = bp.CanTargetEnemies;
+                bool canTargetFriends = bp.CanTargetFriends;
+                bool hasWeapon = ability.Weapon != null;
+                string range = bp.Range.ToString();
+                string bpName = bp.name?.ToLower() ?? "";
+
+                // ========================================
+                // 위험한 AoE 스킬 감지 (아군 피해 가능)
+                // ========================================
+                if (canTargetEnemies && canTargetFriends && !canTargetSelf)
+                {
+                    // 적과 아군 모두 타겟 가능 = 위험한 AoE
+                    return AbilityTiming.DangerousAoE;
+                }
+
+                // ========================================
+                // Personal 범위 자기 버프 감지
+                // ========================================
+                if (range == "Personal" && canTargetSelf && !canTargetEnemies && !hasWeapon)
+                {
+                    // 턴 종료 키워드 체크
+                    if (bpName.Contains("veil") || bpName.Contains("stance") ||
+                        bpName.Contains("defend") || bpName.Contains("guard"))
+                    {
+                        return AbilityTiming.TurnEnding;
+                    }
+
+                    // 그 외 Personal 자기 버프 → PreAttackBuff
+                    return AbilityTiming.PreAttackBuff;
+                }
+
+                // ========================================
+                // 자해 스킬 감지 (HP 소모)
+                // ========================================
+                if (bpName.Contains("blood") || bpName.Contains("oath") ||
+                    bpName.Contains("sacrifice") || bpName.Contains("wound"))
+                {
+                    // HP 소모 가능성 있음
+                    if (canTargetSelf || range == "Personal")
+                    {
+                        return AbilityTiming.SelfDamage;
+                    }
+                }
+
+                // ========================================
+                // 마무리 스킬 감지
+                // ========================================
+                if (bpName.Contains("dispatch") || bpName.Contains("execute") ||
+                    bpName.Contains("finish") || bpName.Contains("deathblow"))
+                {
+                    return AbilityTiming.Finisher;
+                }
+
+                // 기본값
+                return AbilityTiming.Normal;
+            }
+            catch
+            {
+                return AbilityTiming.Normal;
+            }
         }
 
         /// <summary>

@@ -178,6 +178,9 @@ namespace CompanionAI_v2_2.Core
         /// </summary>
         public static readonly HashSet<string> Healing = new HashSet<string>
         {
+            // ★ v2.2.8: 일반 메디킷 추가
+            "083d5280759b4ed3a2d0b61254653273",  // Medikit_ability - 일반 메디킷 (가장 흔함)
+
             "b6e3c9398ea94c75afdbf61633ce2f85",  // BattleMedicsBoots_Medikit_ability - 메디킷
             "dd2e9a6170b448d4b2ec5a7fe0321e65",  // BattleStimulator_Medikit_ability - 전투 자극제 메디킷
             "ededbc48a7f24738a0fdb708fc48bb4c",  // ChirurgeonMedikit_Ability - 군의관 메디킷
