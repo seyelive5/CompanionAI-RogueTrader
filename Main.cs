@@ -4,6 +4,7 @@ using HarmonyLib;
 using UnityModManagerNet;
 using CompanionAI_v2_2.Settings;
 using CompanionAI_v2_2.UI;
+using CompanionAI_v2_2.Core;
 
 namespace CompanionAI_v2_2
 {
@@ -21,7 +22,6 @@ namespace CompanionAI_v2_2
         public static UnityModManager.ModEntry ModEntry { get; private set; }
         public static ModSettings Settings { get; private set; }
         public static Harmony HarmonyInstance { get; private set; }
-
         public static bool Load(UnityModManager.ModEntry modEntry)
         {
             try
@@ -40,6 +40,8 @@ namespace CompanionAI_v2_2
                 HarmonyInstance = new Harmony(modEntry.Info.Id);
                 HarmonyInstance.PatchAll(Assembly.GetExecutingAssembly());
                 Log("Harmony patches applied");
+
+                // CombatStateListener는 static class로 Harmony 패치에서 자동 호출됨
 
                 Log("Companion AI v2.2 initialized successfully!");
                 return true;

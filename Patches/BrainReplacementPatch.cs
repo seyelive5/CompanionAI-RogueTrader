@@ -27,6 +27,9 @@ namespace CompanionAI_v2_2.Patches
             {
                 if (!Main.Enabled) return;
 
+                // 전투 상태 변화 감지 (전투 시작/종료 시 상태 초기화)
+                CombatStateListener.CheckCombatState(__instance);
+
                 var currentUnit = __instance.CurrentUnit as BaseUnitEntity;
                 if (currentUnit == null) return;
 
