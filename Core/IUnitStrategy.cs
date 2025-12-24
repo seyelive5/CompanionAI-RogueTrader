@@ -42,6 +42,11 @@ namespace CompanionAI_v2_2.Core
         public BaseUnitEntity WeakestEnemy { get; set; }
         public BaseUnitEntity MostWoundedAlly { get; set; }
 
+        // ★ v2.2.9: 스코어링 기반 최적 타겟
+        public BaseUnitEntity BestTarget { get; set; }
+        public BaseUnitEntity BestMeleeTarget { get; set; }
+        public BaseUnitEntity BestRangedTarget { get; set; }
+
         // 상황 분석
         public bool IsInMeleeRange { get; set; }
         public int EnemiesInMeleeRange { get; set; }

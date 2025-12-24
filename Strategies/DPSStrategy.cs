@@ -47,7 +47,7 @@ namespace CompanionAI_v2_2.Strategies
 
             Main.Log($"[DPS] {ctx.Unit.CharacterName}: HP={ctx.HPPercent:F0}%, " +
                     $"{GameAPI.GetVeilStatusString()}, {GameAPI.GetMomentumStatusString()}, " +
-                    $"WeakestEnemy={ctx.WeakestEnemy?.CharacterName ?? "none"}, " +
+                    $"BestTarget={ctx.BestTarget?.CharacterName ?? "none"}, " +
                     $"FirstAction={ctx.HasPerformedFirstAction}");
 
             // Phase 1: 긴급 자기 힐
@@ -76,8 +76,8 @@ namespace CompanionAI_v2_2.Strategies
                 if (buffResult != null) return buffResult;
             }
 
-            // Phase 4: 공격 - 약한 적 우선
-            var target = ctx.WeakestEnemy ?? ctx.NearestEnemy;
+            // Phase 4: 공격 - ★ v2.2.9: 스코어링 기반 최적 타겟 우선
+            var target = ctx.BestTarget ?? ctx.WeakestEnemy ?? ctx.NearestEnemy;
             var attackResult = TryAttack(ctx, target);
             if (attackResult != null) return attackResult;
 

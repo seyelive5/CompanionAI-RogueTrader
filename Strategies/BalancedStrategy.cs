@@ -35,10 +35,10 @@ namespace CompanionAI_v2_2.Strategies
             var buffResult = TryProactiveBuffs(ctx);
             if (buffResult != null) return buffResult;
 
-            // 타겟 선택 - 균형적 접근
+            // 타겟 선택 - ★ v2.2.9: 무기 타입별 스코어링 기반
             var target = ctx.IsInMeleeRange && ctx.HasMeleeWeapon
-                ? ctx.NearestEnemy
-                : ctx.WeakestEnemy ?? ctx.NearestEnemy;
+                ? ctx.BestMeleeTarget ?? ctx.NearestEnemy
+                : ctx.BestRangedTarget ?? ctx.BestTarget ?? ctx.NearestEnemy;
 
             // Phase 3: 디버프 적용
             var debuffResult = TryDebuffs(ctx, target);

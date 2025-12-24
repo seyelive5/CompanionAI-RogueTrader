@@ -473,6 +473,187 @@ namespace CompanionAI_v2_2.Core
 
         #endregion
 
+        #region ★ v2.2.9: Advanced Target Scoring System - 게임 AI 스타일 스코어링
+
+        /// <summary>
+        /// 타겟 점수 정보
+        /// </summary>
+        public class TargetScore
+        {
+            public BaseUnitEntity Target;
+            public float TotalScore;
+            public float HPPercentScore;      // HP% 낮을수록 높음
+            public float HPAbsoluteScore;     // 절대HP 낮을수록 높음 (마무리 쉬움)
+            public float DistanceScore;       // 가까울수록 높음
+            public float KillableBonus;       // 처치 가능하면 보너스
+
+            public override string ToString()
+            {
+                return $"{Target?.CharacterName}: Total={TotalScore:F1} (HP%={HPPercentScore:F1}, HPAbs={HPAbsoluteScore:F1}, Dist={DistanceScore:F1}, Kill={KillableBonus:F1})";
+            }
+        }
+
+        /// <summary>
+        /// ★ 복합 스코어링으로 최적 타겟 찾기
+        /// 게임 AI의 AttackEffectivenessTileScorer 참고
+        /// </summary>
+        public static BaseUnitEntity FindBestTarget(BaseUnitEntity unit, List<BaseUnitEntity> enemies,
+            bool preferKillable = true, bool preferClose = false)
+        {
+            if (unit == null || enemies == null || enemies.Count == 0) return null;
+
+            var scores = ScoreAllTargets(unit, enemies);
+            if (scores.Count == 0) return null;
+
+            // 처치 가능한 적 우선
+            if (preferKillable)
+            {
+                var killable = scores.Where(s => s.KillableBonus > 0).OrderByDescending(s => s.TotalScore).FirstOrDefault();
+                if (killable != null)
+                {
+                    Main.LogDebug($"[TargetScore] Killable target: {killable}");
+                    return killable.Target;
+                }
+            }
+
+            // 가까운 적 우선 (근접 무기용)
+            if (preferClose)
+            {
+                var best = scores.OrderByDescending(s => s.DistanceScore + s.HPPercentScore).FirstOrDefault();
+                if (best != null)
+                {
+                    Main.LogDebug($"[TargetScore] Close target: {best}");
+                    return best.Target;
+                }
+            }
+
+            // 기본: 총점 기준
+            var bestOverall = scores.OrderByDescending(s => s.TotalScore).FirstOrDefault();
+            if (bestOverall != null)
+            {
+                Main.LogDebug($"[TargetScore] Best overall: {bestOverall}");
+                return bestOverall.Target;
+            }
+
+            return enemies.FirstOrDefault(e => e != null && !e.LifeState.IsDead);
+        }
+
+        /// <summary>
+        /// 모든 적에 대해 점수 계산
+        /// </summary>
+        public static List<TargetScore> ScoreAllTargets(BaseUnitEntity unit, List<BaseUnitEntity> enemies)
+        {
+            var scores = new List<TargetScore>();
+            if (unit == null || enemies == null) return scores;
+
+            // 거리 정규화용 최대값
+            float maxDistance = 1f;
+            foreach (var enemy in enemies)
+            {
+                if (enemy == null || enemy.LifeState.IsDead) continue;
+                float dist = GetDistance(unit, enemy);
+                if (dist > maxDistance) maxDistance = dist;
+            }
+
+            // 예상 피해량 (기본 무기 기준 추정)
+            float estimatedDamage = EstimateBaseDamage(unit);
+
+            foreach (var enemy in enemies)
+            {
+                if (enemy == null || enemy.LifeState.IsDead) continue;
+
+                try
+                {
+                    var score = new TargetScore { Target = enemy };
+
+                    float hpPercent = GetHPPercent(enemy);
+                    int hpAbsolute = enemy.Health?.HitPointsLeft ?? 100;
+                    float distance = GetDistance(unit, enemy);
+
+                    // 1. HP% 점수: 낮을수록 높음 (0~100 -> 100~0)
+                    score.HPPercentScore = (100f - hpPercent) / 100f * 30f;  // 최대 30점
+
+                    // 2. 절대HP 점수: 낮을수록 높음 (게임 AI: 1/HP)
+                    // 정규화: HP 1~500 -> 점수 20~0.04, cap at 20
+                    score.HPAbsoluteScore = Math.Min(20f, 100f / Math.Max(5f, hpAbsolute));
+
+                    // 3. 거리 점수: 가까울수록 높음
+                    score.DistanceScore = (1f - distance / maxDistance) * 15f;  // 최대 15점
+
+                    // 4. 처치 가능 보너스: 한 번에 죽일 수 있으면 큰 보너스
+                    if (hpAbsolute <= estimatedDamage * 1.2f)  // 20% 여유
+                    {
+                        score.KillableBonus = 35f;  // 큰 보너스
+                    }
+                    else if (hpAbsolute <= estimatedDamage * 2f)
+                    {
+                        score.KillableBonus = 10f;  // 2타 내에 죽일 수 있음
+                    }
+
+                    // 총점 계산
+                    score.TotalScore = score.HPPercentScore + score.HPAbsoluteScore +
+                                      score.DistanceScore + score.KillableBonus;
+
+                    scores.Add(score);
+                }
+                catch (Exception ex)
+                {
+                    Main.LogDebug($"[TargetScore] Error scoring {enemy?.CharacterName}: {ex.Message}");
+                }
+            }
+
+            return scores;
+        }
+
+        /// <summary>
+        /// 유닛의 기본 피해량 추정
+        /// 무기 API가 복잡하므로 간단한 휴리스틱 사용
+        /// </summary>
+        private static float EstimateBaseDamage(BaseUnitEntity unit)
+        {
+            if (unit == null) return 30f;  // 기본값
+
+            try
+            {
+                // 휴리스틱: 레벨 기반 추정
+                // 일반적으로 레벨 * 3 정도의 피해를 입힘
+                int level = unit.Progression?.CharacterLevel ?? 10;
+                float baseDamage = level * 3f + 10f;
+
+                // 무기 장착 여부로 보정
+                var primaryWeapon = unit.Body?.PrimaryHand?.MaybeWeapon;
+                if (primaryWeapon != null)
+                {
+                    // 무기가 있으면 약간 보너스
+                    baseDamage *= 1.2f;
+                }
+
+                return Math.Max(20f, baseDamage);
+            }
+            catch { }
+
+            return 30f;  // 폴백 값
+        }
+
+        /// <summary>
+        /// ★ 무기 타입에 맞는 최적 타겟 찾기
+        /// </summary>
+        public static BaseUnitEntity FindBestTargetForWeapon(BaseUnitEntity unit, List<BaseUnitEntity> enemies, bool isMelee)
+        {
+            if (isMelee)
+            {
+                // 근접: 가까운 적 우선, 처치 가능하면 더 좋음
+                return FindBestTarget(unit, enemies, preferKillable: true, preferClose: true);
+            }
+            else
+            {
+                // 원거리: 처치 가능한 적 우선, 거리는 덜 중요
+                return FindBestTarget(unit, enemies, preferKillable: true, preferClose: false);
+            }
+        }
+
+        #endregion
+
         #region Veil Degradation - Psyker 안전 관리
 
         public const int VEIL_WARNING_THRESHOLD = 10;

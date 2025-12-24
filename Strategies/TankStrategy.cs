@@ -64,8 +64,8 @@ namespace CompanionAI_v2_2.Strategies
             var tauntResult = TryTaunt(ctx);
             if (tauntResult != null) return tauntResult;
 
-            // Phase 5: 공격 - 가장 가까운 적 우선 (어그로 유지)
-            var attackResult = TryAttack(ctx, ctx.NearestEnemy);
+            // Phase 5: 공격 - ★ v2.2.9: 근접 스코어링 타겟 우선 (어그로 유지)
+            var attackResult = TryAttack(ctx, ctx.BestMeleeTarget ?? ctx.NearestEnemy);
             if (attackResult != null) return attackResult;
 
             // Phase 6: PostFirstAction

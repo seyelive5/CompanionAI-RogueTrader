@@ -153,6 +153,11 @@ namespace CompanionAI_v2_2.Core
                 ctx.WeakestEnemy = GameAPI.FindWeakestEnemy(ctx.Enemies);
                 ctx.MostWoundedAlly = GameAPI.FindMostWoundedAlly(unit, ctx.Allies);
 
+                // ★ v2.2.9: 스코어링 기반 최적 타겟
+                ctx.BestTarget = GameAPI.FindBestTarget(unit, ctx.Enemies);
+                ctx.BestMeleeTarget = GameAPI.FindBestTargetForWeapon(unit, ctx.Enemies, isMelee: true);
+                ctx.BestRangedTarget = GameAPI.FindBestTargetForWeapon(unit, ctx.Enemies, isMelee: false);
+
                 // 상황 분석
                 ctx.EnemiesInMeleeRange = 0;
                 foreach (var enemy in ctx.Enemies)

@@ -340,7 +340,8 @@ namespace CompanionAI_v2_2.Strategies
         protected List<AbilityData> GetOffensiveAbilities(List<AbilityData> abilities)
         {
             return abilities
-                .Where(a => (GameAPI.IsOffensiveAbility(a) || GameAPI.IsMeleeAbility(a) || GameAPI.IsRangedAbility(a)) &&
+                .Where(a => a.Blueprint?.CanTargetEnemies == true &&  // ★ v2.2.9: 적 타겟 가능한 스킬만
+                           (GameAPI.IsOffensiveAbility(a) || GameAPI.IsMeleeAbility(a) || GameAPI.IsRangedAbility(a)) &&
                            !AbilityRulesDatabase.IsPostFirstAction(a) &&
                            !AbilityRulesDatabase.IsTurnEnding(a) &&
                            !AbilityRulesDatabase.IsFinisher(a))
