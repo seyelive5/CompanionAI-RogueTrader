@@ -171,6 +171,19 @@ namespace CompanionAI_v2_2.Core
                 ctx.HasMeleeWeapon = HasWeaponOfType(unit, true);
                 ctx.HasRangedWeapon = HasWeaponOfType(unit, false);
 
+                // ★ v2.2.10: AP 관리
+                ctx.CurrentAP = GameAPI.GetCurrentAP(unit);
+                ctx.MaxAP = GameAPI.GetMaxAP(unit);
+
+                // 주 무기 공격 찾기 및 AP 예약
+                bool preferRanged = settings.Role == AIRole.DPS && ctx.HasRangedWeapon;
+                ctx.PrimaryWeaponAttack = GameAPI.FindPrimaryWeaponAttack(ctx.AvailableAbilities, preferRanged);
+                if (ctx.PrimaryWeaponAttack != null)
+                {
+                    ctx.ReservedAPForAttack = GameAPI.GetAbilityAPCost(ctx.PrimaryWeaponAttack);
+                    Main.LogDebug($"[Orchestrator] {unit.CharacterName}: AP={ctx.CurrentAP:F1}, Reserved={ctx.ReservedAPForAttack:F1} for {ctx.PrimaryWeaponAttack.Name}");
+                }
+
                 return ctx;
             }
             catch (Exception ex)
@@ -231,9 +244,8 @@ namespace CompanionAI_v2_2.Core
                     if (!GameAPI.IsAbilityAvailable(abilityData, out reasons))
                         continue;
 
-                    // 전투당 1회 제한 스킬 체크
-                    var rule = AbilityRulesDatabase.GetRule(abilityData);
-                    if (rule?.SingleUsePerCombat == true)
+                    // ★ v2.2.33: 전투당 1회 제한 스킬 체크 (AbilityDatabase 사용)
+                    if (AbilityDatabase.IsSingleUse(abilityData))
                     {
                         string abilityId = abilityData.Blueprint?.AssetGuid?.ToString() ?? abilityData.Name;
                         if (turnState.UsedAbilities.Contains(abilityId))
@@ -269,16 +281,18 @@ namespace CompanionAI_v2_2.Core
 
         #region Turn State Management
 
+        /// <summary>
+        /// ★ v2.2.33: AbilityDatabase 사용으로 변경
+        /// </summary>
         private static void UpdateTurnState(BaseUnitEntity unit, AbilityData ability, TurnState turnState)
         {
-            var timing = AbilityRulesDatabase.GetTiming(ability);
+            var timing = AbilityDatabase.GetTiming(ability);
 
             // 첫 행동 마킹 (버프가 아닌 실제 행동)
             if (!turnState.HasPerformedFirstAction)
             {
-                if (timing != AbilityTiming.PreCombatBuff &&
-                    timing != AbilityTiming.PreAttackBuff &&
-                    timing != AbilityTiming.StackingBuff)
+                if (timing != AbilityDatabase.AbilityTiming.PreCombatBuff &&
+                    timing != AbilityDatabase.AbilityTiming.PreAttackBuff)
                 {
                     turnState.HasPerformedFirstAction = true;
                     Main.Log($"[Orchestrator] {unit.CharacterName}: First action performed with {ability.Name}");
@@ -288,8 +302,7 @@ namespace CompanionAI_v2_2.Core
             turnState.ActionsPerformed++;
 
             // 1회 제한 스킬 기록
-            var rule = AbilityRulesDatabase.GetRule(ability);
-            if (rule?.SingleUsePerCombat == true)
+            if (AbilityDatabase.IsSingleUse(ability))
             {
                 string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
                 turnState.UsedAbilities.Add(abilityId);

@@ -4,11 +4,13 @@ using Kingmaker.EntitySystem.Entities;
 using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.Utility;
 using CompanionAI_v2_2.Core;
+using static CompanionAI_v2_2.Core.AbilityDatabase;
 
 namespace CompanionAI_v2_2.Strategies
 {
     /// <summary>
     /// v2.2.0: DPS 전략 - 타이밍 인식 딜러형
+    /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적 시스템 사용
     ///
     /// 특징:
     /// - 약한 적 우선 (빠른 처치)
@@ -31,19 +33,9 @@ namespace CompanionAI_v2_2.Strategies
     {
         public override string StrategyName => "DPS";
 
-        // 이번 턴에 사용한 능력 추적 (중복 버프 방지)
-        private static HashSet<string> _usedAbilitiesThisTurn = new HashSet<string>();
-        private static string _lastUnitId = null;
-
         public override ActionDecision DecideAction(ActionContext ctx)
         {
-            // 유닛이 바뀌면 추적 초기화
             string unitId = ctx.Unit.UniqueId;
-            if (_lastUnitId != unitId)
-            {
-                _usedAbilitiesThisTurn.Clear();
-                _lastUnitId = unitId;
-            }
 
             Main.Log($"[DPS] {ctx.Unit.CharacterName}: HP={ctx.HPPercent:F0}%, " +
                     $"{GameAPI.GetVeilStatusString()}, {GameAPI.GetMomentumStatusString()}, " +
@@ -53,6 +45,10 @@ namespace CompanionAI_v2_2.Strategies
             // Phase 1: 긴급 자기 힐
             var healResult = TryEmergencySelfHeal(ctx);
             if (healResult != null) return healResult;
+
+            // ★ Phase 1.5: 재장전 (v2.2.30 - 탄약 없으면 필수)
+            var reloadResult = TryReload(ctx);
+            if (reloadResult != null) return reloadResult;
 
             // Phase 2: Heroic Act (Momentum 175+)
             if (GameAPI.IsHeroicActAvailable())
@@ -116,29 +112,36 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// Heroic Act 사용 시도 (Momentum 175+)
+        /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적
         /// </summary>
         private ActionDecision TryUseHeroicAct(ActionContext ctx)
         {
+            string unitId = ctx.Unit.UniqueId;
+
             foreach (var ability in ctx.AvailableAbilities)
             {
                 if (!GameAPI.IsHeroicActAbility(ability)) continue;
 
-                // 버프 활성 체크
+                // 1차: 실제 버프 상태 확인 (게임 API)
                 if (GameAPI.HasActiveBuff(ctx.Unit, ability))
                 {
                     Main.LogDebug($"[DPS] Skip Heroic Act {ability.Name}: already active");
                     continue;
                 }
 
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
-                if (_usedAbilitiesThisTurn.Contains(abilityId)) continue;
+                // 2차: 최근 사용 여부 확인 (프레임 기반 자동 만료)
+                if (AbilityUsageTracker.WasUsedRecently(unitId, ability))
+                {
+                    Main.LogDebug($"[DPS] Skip Heroic Act {ability.Name}: used recently");
+                    continue;
+                }
 
                 string reason;
                 var target = new TargetWrapper(ctx.Unit);
 
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    _usedAbilitiesThisTurn.Add(abilityId);
+                    AbilityUsageTracker.MarkUsed(unitId, ability);
                     Main.Log($"[DPS] HEROIC ACT: {ability.Name} - Momentum={GameAPI.GetCurrentMomentum()}");
                     return ActionDecision.UseAbility(ability, target, "Heroic Act - high momentum");
                 }
@@ -149,31 +152,56 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// 공격 버프 우선 사용 (PreAttackBuff)
+        /// ★ v2.2.12: Run and Gun 차단 + AP 예약 체크
+        /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적
         /// </summary>
         private ActionDecision TryAttackBuffs(ActionContext ctx)
         {
+            string unitId = ctx.Unit.UniqueId;
             var target = new TargetWrapper(ctx.Unit);
 
             foreach (var ability in ctx.AvailableAbilities)
             {
-                var timing = AbilityRulesDatabase.GetTiming(ability);
+                var timing = AbilityDatabase.GetTiming(ability);
                 if (timing != AbilityTiming.PreAttackBuff) continue;
+
+                // ★ v2.2.12: Run and Gun은 첫 공격 전에 절대 사용하지 않음!
+                if (AbilityDatabase.IsRunAndGun(ability))
+                {
+                    Main.LogDebug($"[DPS] Skip Run and Gun in TryAttackBuffs (first action not performed)");
+                    continue;
+                }
+
+                // PostFirstAction 타이밍 스킬은 첫 행동 전에 사용하지 않음
+                if (AbilityDatabase.IsPostFirstAction(ability))
+                {
+                    Main.LogDebug($"[DPS] Skip {ability.Name}: PostFirstAction timing");
+                    continue;
+                }
 
                 // 자기 타겟 버프만
                 if (!GameAPI.IsSelfTargetAbility(ability)) continue;
+
+                // 1차: 실제 버프 상태 확인 (게임 API)
                 if (GameAPI.HasActiveBuff(ctx.Unit, ability)) continue;
 
-                // 중복 방지
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
-                if (_usedAbilitiesThisTurn.Contains(abilityId)) continue;
+                // 2차: 최근 사용 여부 확인 (프레임 기반 자동 만료)
+                if (AbilityUsageTracker.WasUsedRecently(unitId, ability)) continue;
 
                 if (!IsSafePsychicAbility(ability)) continue;
+
+                // ★ v2.2.12: AP 예약 체크 - 무기 공격용 AP 보존
+                if (!GameAPI.CanAffordAbilityWithReserve(ctx, ability, ctx.ReservedAPForAttack))
+                {
+                    Main.LogDebug($"[DPS] Skip {ability.Name}: not enough AP (current={ctx.CurrentAP:F1}, cost={GameAPI.GetAbilityAPCost(ability):F1}, reserved={ctx.ReservedAPForAttack:F1})");
+                    continue;
+                }
 
                 string reason;
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    _usedAbilitiesThisTurn.Add(abilityId);
-                    Main.Log($"[DPS] Attack buff: {ability.Name}");
+                    AbilityUsageTracker.MarkUsed(unitId, ability);
+                    Main.Log($"[DPS] Attack buff: {ability.Name} (AP: {ctx.CurrentAP:F1} -> {ctx.CurrentAP - GameAPI.GetAbilityAPCost(ability):F1})");
                     return ActionDecision.UseAbility(ability, target, "Attack buff before strike");
                 }
             }
@@ -204,7 +232,7 @@ namespace CompanionAI_v2_2.Strategies
             foreach (var ability in ctx.AvailableAbilities)
             {
                 // GUID 기반 갭 클로저 확인
-                if (!AbilityGuids.IsGapCloser(ability)) continue;
+                if (!AbilityDatabase.IsGapCloser(ability)) continue;
 
                 // 자기 타겟이 아닌 공격성 스킬
                 if (GameAPI.IsSelfTargetAbility(ability)) continue;

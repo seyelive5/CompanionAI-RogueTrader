@@ -1,10 +1,12 @@
 using HarmonyLib;
 using Kingmaker.Controllers.TurnBased;
+using CompanionAI_v2_2.Patches;
 
 namespace CompanionAI_v2_2.Core
 {
     /// <summary>
     /// v2.2.1: 전투 상태 감시자
+    /// v2.2.17: CustomAIPatch 상태도 함께 초기화
     ///
     /// 역할: 전투 시작/종료 이벤트를 감지하여 AI 상태 초기화
     /// - 전투 시작 시: AIOrchestrator의 모든 상태 초기화
@@ -31,12 +33,14 @@ namespace CompanionAI_v2_2.Core
             {
                 _wasInCombat = true;
                 AIOrchestrator.OnCombatStart();
+                CustomAIPatch.OnCombatStateChanged();  // ★ v2.2.17
             }
             // 전투 종료 감지
             else if (!isInCombat && _wasInCombat)
             {
                 _wasInCombat = false;
                 AIOrchestrator.OnCombatEnd();
+                CustomAIPatch.OnCombatStateChanged();  // ★ v2.2.17
             }
         }
     }

@@ -46,13 +46,11 @@ namespace CompanionAI_v2_2.Settings
             ["CombatRole"] = new() { { Language.English, "Combat Role" }, { Language.Korean, "전투 역할" } },
             ["CombatRoleDesc"] = new() { { Language.English, "How should this character behave in combat?" }, { Language.Korean, "이 캐릭터가 전투에서 어떻게 행동할까요?" } },
 
-            // Role names
+            // Role names (★ v2.2.27: Hybrid/Sniper 제거)
             ["Role_Balanced"] = new() { { Language.English, "Balanced" }, { Language.Korean, "균형" } },
             ["Role_Tank"] = new() { { Language.English, "Tank" }, { Language.Korean, "탱커" } },
             ["Role_DPS"] = new() { { Language.English, "DPS" }, { Language.Korean, "딜러" } },
             ["Role_Support"] = new() { { Language.English, "Support" }, { Language.Korean, "지원" } },
-            ["Role_Hybrid"] = new() { { Language.English, "Hybrid" }, { Language.Korean, "하이브리드" } },
-            ["Role_Sniper"] = new() { { Language.English, "Sniper" }, { Language.Korean, "저격수" } },
 
             // Role descriptions
             ["RoleDesc_Balanced"] = new() {
@@ -70,14 +68,6 @@ namespace CompanionAI_v2_2.Settings
             ["RoleDesc_Support"] = new() {
                 { Language.English, "Team supporter. Prioritizes buffs/debuffs, heals allies, avoids front line." },
                 { Language.Korean, "팀 서포터. 버프/디버프 우선, 아군 치유, 최전방 회피." }
-            },
-            ["RoleDesc_Hybrid"] = new() {
-                { Language.English, "Flexible fighter. Switches between melee and ranged based on situation." },
-                { Language.Korean, "유연한 전사. 상황에 따라 근접/원거리를 자유롭게 전환." }
-            },
-            ["RoleDesc_Sniper"] = new() {
-                { Language.English, "Long-range specialist. Stays far from enemies, maximizes range, retreats if approached." },
-                { Language.Korean, "원거리 전문가. 적과 거리 유지, 사거리 최대화, 접근 시 후퇴." }
             },
 
             // Range Preference
@@ -129,15 +119,14 @@ namespace CompanionAI_v2_2.Settings
 
     /// <summary>
     /// Role-based AI behavior profiles
+    /// ★ v2.2.27: Hybrid/Sniper 제거 (RangePreference로 대체)
     /// </summary>
     public enum AIRole
     {
         Balanced,   // Default balanced behavior
         Tank,       // Prioritize defense, draw enemy attention
         DPS,        // Prioritize damage output
-        Support,    // Prioritize buffs and debuffs
-        Hybrid,     // Melee + Ranged flexible
-        Sniper      // Maximum range, stay back
+        Support     // Prioritize buffs and debuffs
     }
 
     /// <summary>

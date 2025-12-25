@@ -6,6 +6,7 @@ namespace CompanionAI_v2_2.Strategies
 {
     /// <summary>
     /// v2.2.0: 전략 팩토리 - 역할에 따른 전략 인스턴스 제공
+    /// ★ v2.2.27: Hybrid/Sniper 제거
     /// </summary>
     public static class StrategyFactory
     {
@@ -18,8 +19,6 @@ namespace CompanionAI_v2_2.Strategies
             _strategies[AIRole.Tank] = new TankStrategy();
             _strategies[AIRole.DPS] = new DPSStrategy();
             _strategies[AIRole.Support] = new SupportStrategy();
-            _strategies[AIRole.Hybrid] = new BalancedStrategy(); // Hybrid는 Balanced 사용
-            _strategies[AIRole.Sniper] = new DPSStrategy();      // Sniper는 DPS 베이스
         }
 
         /// <summary>

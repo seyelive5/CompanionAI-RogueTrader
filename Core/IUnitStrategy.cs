@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.UnitLogic.Abilities;
@@ -56,6 +57,13 @@ namespace CompanionAI_v2_2.Core
         // ★ v2.2.0: 턴 내 행동 추적
         public bool HasPerformedFirstAction { get; set; } = false;
         public int ActionsPerformedThisTurn { get; set; } = 0;
+
+        // ★ v2.2.10: AP 관리 - 무기 공격용 AP 예약
+        public float CurrentAP { get; set; } = 0f;
+        public float MaxAP { get; set; } = 0f;
+        public float ReservedAPForAttack { get; set; } = 0f;  // 무기 공격에 예약된 AP
+        public float AvailableAPForBuffs => Math.Max(0f, CurrentAP - ReservedAPForAttack);
+        public AbilityData PrimaryWeaponAttack { get; set; }  // 주 무기 공격 (AP 예약용)
 
         // 설정
         public CharacterSettings Settings { get; set; }

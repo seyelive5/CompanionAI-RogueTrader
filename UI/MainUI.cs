@@ -203,13 +203,12 @@ namespace CompanionAI_v2_2.UI
             }
         }
 
+        // ★ v2.2.27: Hybrid/Sniper 제거
         private static string GetRoleColor(AIRole role) => role switch
         {
             AIRole.Tank => "#4169E1",
             AIRole.DPS => "#FF6347",
             AIRole.Support => "#FFD700",
-            AIRole.Hybrid => "#90EE90",
-            AIRole.Sniper => "#00CED1",
             AIRole.Balanced => "#DDA0DD",
             _ => "#FFFFFF"
         };

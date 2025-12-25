@@ -2,11 +2,13 @@ using System.Collections.Generic;
 using System.Linq;
 using Kingmaker.Utility;
 using CompanionAI_v2_2.Core;
+using static CompanionAI_v2_2.Core.AbilityDatabase;
 
 namespace CompanionAI_v2_2.Strategies
 {
     /// <summary>
     /// v2.2.0: Tank 전략 - 타이밍 인식 방어형
+    /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적 시스템 사용
     ///
     /// 특징:
     /// - 방어 자세 우선 (PreCombatBuff)
@@ -27,19 +29,9 @@ namespace CompanionAI_v2_2.Strategies
     {
         public override string StrategyName => "Tank";
 
-        // 이번 턴에 사용한 능력 추적 (중복 버프 방지)
-        private static HashSet<string> _usedAbilityTargetPairs = new HashSet<string>();
-        private static string _lastUnitId = null;
-
         public override ActionDecision DecideAction(ActionContext ctx)
         {
-            // 유닛이 바뀌면 추적 초기화
             string unitId = ctx.Unit.UniqueId;
-            if (_lastUnitId != unitId)
-            {
-                _usedAbilityTargetPairs.Clear();
-                _lastUnitId = unitId;
-            }
 
             Main.Log($"[Tank] {ctx.Unit.CharacterName}: HP={ctx.HPPercent:F0}%, " +
                     $"{GameAPI.GetVeilStatusString()}, {GameAPI.GetMomentumStatusString()}, " +
@@ -48,6 +40,10 @@ namespace CompanionAI_v2_2.Strategies
             // Phase 1: 긴급 자기 힐
             var healResult = TryEmergencySelfHeal(ctx);
             if (healResult != null) return healResult;
+
+            // ★ Phase 1.5: 재장전 (v2.2.30 - 탄약 없으면 필수)
+            var reloadResult = TryReload(ctx);
+            if (reloadResult != null) return reloadResult;
 
             // Phase 2: ★ 방어 자세 우선 (첫 행동 전)
             if (!ctx.HasPerformedFirstAction)
@@ -89,20 +85,22 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// 방어 자세 스킬 우선 사용
+        /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적
         /// </summary>
         private ActionDecision TryDefensiveStance(ActionContext ctx)
         {
+            string unitId = ctx.Unit.UniqueId;
             var target = new TargetWrapper(ctx.Unit);
 
             foreach (var ability in ctx.AvailableAbilities)
             {
                 if (!GameAPI.IsDefensiveStanceAbility(ability)) continue;
+
+                // 1차: 실제 버프 상태 확인 (게임 API)
                 if (GameAPI.HasActiveBuff(ctx.Unit, ability)) continue;
 
-                // 중복 방지
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
-                string pairKey = $"{abilityId}:{ctx.Unit.UniqueId}";
-                if (_usedAbilityTargetPairs.Contains(pairKey)) continue;
+                // 2차: 최근 사용 여부 확인 (프레임 기반 자동 만료)
+                if (AbilityUsageTracker.WasUsedRecently(unitId, ability)) continue;
 
                 // Veil 안전성 체크
                 if (!IsSafePsychicAbility(ability)) continue;
@@ -110,7 +108,7 @@ namespace CompanionAI_v2_2.Strategies
                 string reason;
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    _usedAbilityTargetPairs.Add(pairKey);
+                    AbilityUsageTracker.MarkUsed(unitId, ability);
                     Main.Log($"[Tank] Defensive stance: {ability.Name}");
                     return ActionDecision.UseAbility(ability, target, "Defensive stance priority");
                 }
@@ -131,7 +129,7 @@ namespace CompanionAI_v2_2.Strategies
             foreach (var ability in ctx.AvailableAbilities)
             {
                 // GUID 기반 도발 스킬 확인
-                if (!AbilityGuids.IsTaunt(ability)) continue;
+                if (!AbilityDatabase.IsTaunt(ability)) continue;
 
                 // 버프 활성 체크
                 if (GameAPI.HasActiveBuff(ctx.Unit, ability))

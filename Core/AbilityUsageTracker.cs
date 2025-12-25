@@ -1,0 +1,195 @@
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+
+namespace CompanionAI_v2_2.Core
+{
+    /// <summary>
+    /// v2.2.28: 중앙화된 능력 사용 추적 시스템
+    ///
+    /// 설계 원칙:
+    /// 1. 프레임 기반 자동 만료 - 전투 간 초기화 불필요
+    /// 2. GameAPI.HasActiveBuff와 함께 사용
+    /// 3. 각 전략에서 개별 추적 코드 제거
+    ///
+    /// 사용 흐름:
+    /// 1. HasActiveBuff() → 실제 버프 상태 확인 (1차)
+    /// 2. WasUsedRecently() → 같은 결정 사이클 내 중복 방지 (2차)
+    /// 3. MarkUsed() → 시전 시 기록
+    /// </summary>
+    public static class AbilityUsageTracker
+    {
+        // 유닛ID -> (능력ID -> 사용된 프레임)
+        private static readonly Dictionary<string, Dictionary<string, int>> _usageByUnit
+            = new Dictionary<string, Dictionary<string, int>>();
+
+        // 결정 사이클 내 중복 방지를 위한 프레임 윈도우
+        // 60fps 기준 약 1초 (한 턴의 결정 사이클)
+        private const int DEFAULT_FRAME_WINDOW = 60;
+
+        // 오래된 기록 정리 임계값 (약 15초)
+        private const int CLEANUP_THRESHOLD = 900;
+
+        /// <summary>
+        /// 능력 사용 기록
+        /// </summary>
+        public static void MarkUsed(string unitId, string abilityId)
+        {
+            if (string.IsNullOrEmpty(unitId) || string.IsNullOrEmpty(abilityId))
+                return;
+
+            if (!_usageByUnit.TryGetValue(unitId, out var abilities))
+            {
+                abilities = new Dictionary<string, int>();
+                _usageByUnit[unitId] = abilities;
+            }
+
+            abilities[abilityId] = Time.frameCount;
+            Main.LogDebug($"[UsageTracker] Marked: {abilityId} for unit {unitId} at frame {Time.frameCount}");
+        }
+
+        /// <summary>
+        /// 능력 사용 기록 (AbilityData 오버로드)
+        /// </summary>
+        public static void MarkUsed(string unitId, Kingmaker.UnitLogic.Abilities.AbilityData ability)
+        {
+            if (ability == null) return;
+            string abilityId = GetAbilityId(ability);
+            MarkUsed(unitId, abilityId);
+        }
+
+        /// <summary>
+        /// 최근에 사용했는지 확인 (프레임 윈도우 내)
+        /// </summary>
+        public static bool WasUsedRecently(string unitId, string abilityId, int frameWindow = DEFAULT_FRAME_WINDOW)
+        {
+            if (string.IsNullOrEmpty(unitId) || string.IsNullOrEmpty(abilityId))
+                return false;
+
+            if (!_usageByUnit.TryGetValue(unitId, out var abilities))
+                return false;
+
+            if (!abilities.TryGetValue(abilityId, out int usedFrame))
+                return false;
+
+            int framesSince = Time.frameCount - usedFrame;
+            bool wasRecent = framesSince <= frameWindow;
+
+            if (wasRecent)
+            {
+                Main.LogDebug($"[UsageTracker] {abilityId} was used {framesSince} frames ago (within {frameWindow})");
+            }
+
+            return wasRecent;
+        }
+
+        /// <summary>
+        /// 최근에 사용했는지 확인 (AbilityData 오버로드)
+        /// </summary>
+        public static bool WasUsedRecently(string unitId, Kingmaker.UnitLogic.Abilities.AbilityData ability, int frameWindow = DEFAULT_FRAME_WINDOW)
+        {
+            if (ability == null) return false;
+            string abilityId = GetAbilityId(ability);
+            return WasUsedRecently(unitId, abilityId, frameWindow);
+        }
+
+        /// <summary>
+        /// 특정 타겟에 대해 최근 사용했는지 확인
+        /// (버프를 특정 아군에게 건 경우 등)
+        /// </summary>
+        public static bool WasUsedOnTargetRecently(string unitId, string abilityId, string targetId, int frameWindow = DEFAULT_FRAME_WINDOW)
+        {
+            string pairKey = $"{abilityId}:{targetId}";
+            return WasUsedRecently(unitId, pairKey, frameWindow);
+        }
+
+        /// <summary>
+        /// 특정 타겟에 대해 능력 사용 기록
+        /// </summary>
+        public static void MarkUsedOnTarget(string unitId, string abilityId, string targetId)
+        {
+            string pairKey = $"{abilityId}:{targetId}";
+            MarkUsed(unitId, pairKey);
+        }
+
+        /// <summary>
+        /// 특정 타겟에 대해 능력 사용 기록 (AbilityData 오버로드)
+        /// </summary>
+        public static void MarkUsedOnTarget(string unitId, Kingmaker.UnitLogic.Abilities.AbilityData ability, string targetId)
+        {
+            if (ability == null) return;
+            string abilityId = GetAbilityId(ability);
+            MarkUsedOnTarget(unitId, abilityId, targetId);
+        }
+
+        /// <summary>
+        /// AbilityData에서 고유 ID 추출
+        /// GUID 우선, 없으면 이름 사용
+        /// </summary>
+        public static string GetAbilityId(Kingmaker.UnitLogic.Abilities.AbilityData ability)
+        {
+            if (ability == null) return "";
+            return ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name ?? "unknown";
+        }
+
+        /// <summary>
+        /// 오래된 기록 정리 (메모리 관리)
+        /// 선택적으로 호출 - 전투 종료 시 등
+        /// </summary>
+        public static void CleanupOldEntries()
+        {
+            int currentFrame = Time.frameCount;
+            int cleanedCount = 0;
+
+            foreach (var unitAbilities in _usageByUnit.Values)
+            {
+                var keysToRemove = unitAbilities
+                    .Where(kvp => currentFrame - kvp.Value > CLEANUP_THRESHOLD)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+                foreach (var key in keysToRemove)
+                {
+                    unitAbilities.Remove(key);
+                    cleanedCount++;
+                }
+            }
+
+            // 빈 유닛 항목 제거
+            var emptyUnits = _usageByUnit
+                .Where(kvp => kvp.Value.Count == 0)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var unitId in emptyUnits)
+            {
+                _usageByUnit.Remove(unitId);
+            }
+
+            if (cleanedCount > 0)
+            {
+                Main.LogDebug($"[UsageTracker] Cleaned up {cleanedCount} old entries");
+            }
+        }
+
+        /// <summary>
+        /// 전체 초기화 (필요 시)
+        /// 프레임 기반이므로 보통 필요 없음
+        /// </summary>
+        public static void ClearAll()
+        {
+            _usageByUnit.Clear();
+            Main.LogDebug("[UsageTracker] All tracking cleared");
+        }
+
+        /// <summary>
+        /// 디버그: 현재 추적 상태 출력
+        /// </summary>
+        public static string GetDebugStatus()
+        {
+            int totalUnits = _usageByUnit.Count;
+            int totalAbilities = _usageByUnit.Values.Sum(d => d.Count);
+            return $"[UsageTracker] Units: {totalUnits}, Abilities: {totalAbilities}, Frame: {Time.frameCount}";
+        }
+    }
+}

@@ -7,6 +7,9 @@
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- ★ 직접 UMM 폴더로 빌드 (복사 불필요) -->
+    <OutputPath>$(LOCALAPPDATA)Low\Owlcat Games\Warhammer 40000 Rogue Trader\UnityModManager\CompanionAI_v2.2\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -78,6 +81,11 @@
 
     <!-- Json -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Info.json 자동 복사 -->
+  <ItemGroup>
+    <None Include="Info.json" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
 </Project>

@@ -265,6 +265,7 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// ★ v2.2.1: 상황에 맞는 최적 공격 선택
+        /// ★ v2.2.10: 무기 공격 우선 (스킬 공격보다 낮은 우선순위 값)
         /// </summary>
         public static int GetAttackPriority(
             AbilityData ability,
@@ -277,46 +278,54 @@ namespace CompanionAI_v2_2.Core
             int enemiesNear = target != null ? CountEnemiesNearPosition(target.Position, allEnemies, 5f) : 1;
             int alliesNear = target != null ? CountAlliesNearEnemy(caster, target, allies, 3f) : 0;
 
+            // ★ v2.2.10: 무기 공격 여부 확인
+            bool isWeaponAttack = ability.Weapon != null;
+
             // 기본 우선순위 (낮을수록 우선)
-            int priority = 100;
+            // ★ 무기 공격은 기본적으로 스킬 공격보다 우선
+            int priority = isWeaponAttack ? 50 : 150;
 
             switch (attackType)
             {
                 case WeaponAttackType.Single:
                     // 단일 타겟: 적 1명일 때 최적
-                    priority = enemiesNear == 1 ? 10 : 50;
+                    priority = isWeaponAttack
+                        ? (enemiesNear == 1 ? 5 : 15)   // 무기 공격
+                        : (enemiesNear == 1 ? 50 : 80); // 스킬 공격
                     break;
 
                 case WeaponAttackType.Burst:
                     // 점사: 적 1-2명일 때 적합
-                    priority = enemiesNear <= 2 ? 20 : 40;
+                    priority = isWeaponAttack
+                        ? (enemiesNear <= 2 ? 8 : 20)
+                        : (enemiesNear <= 2 ? 60 : 90);
                     break;
 
                 case WeaponAttackType.Scatter:
                     // 산탄/확산: 적 2명 이상 + 아군 안전할 때
                     if (enemiesNear >= 2 && alliesNear <= 1)
-                        priority = 5; // 최우선
+                        priority = isWeaponAttack ? 3 : 40;
                     else if (alliesNear > 1)
                         priority = 200; // 아군 위험 - 사용 안함
                     else
-                        priority = 60;
+                        priority = isWeaponAttack ? 25 : 70;
                     break;
 
                 case WeaponAttackType.Grenade:
                     // 수류탄: 적 2명 이상 필수
                     if (enemiesNear >= 2 && alliesNear == 0)
-                        priority = 3; // 최우선
+                        priority = 2; // 최우선 (수류탄은 효율적일 때만)
                     else
                         priority = 300; // 비효율 - 사용 안함
                     break;
 
                 case WeaponAttackType.Melee:
-                    // 근접: 거리에 따라
-                    priority = 30;
+                    // 근접: 무기 공격 우선
+                    priority = isWeaponAttack ? 10 : 55;
                     break;
 
                 default:
-                    priority = 100;
+                    priority = isWeaponAttack ? 50 : 150;
                     break;
             }
 

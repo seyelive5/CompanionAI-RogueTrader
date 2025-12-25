@@ -31,6 +31,10 @@ namespace CompanionAI_v2_2.Strategies
             var healResult = TryEmergencySelfHeal(ctx);
             if (healResult != null) return healResult;
 
+            // ★ Phase 1.5: 재장전 (v2.2.30 - 탄약 없으면 필수)
+            var reloadResult = TryReload(ctx);
+            if (reloadResult != null) return reloadResult;
+
             // Phase 2: 선제적 버프 (첫 행동 전에만)
             var buffResult = TryProactiveBuffs(ctx);
             if (buffResult != null) return buffResult;

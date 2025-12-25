@@ -12,6 +12,7 @@ namespace CompanionAI_v2_2.Strategies
 {
     /// <summary>
     /// v2.2.0: Support 전략 - 타이밍 인식 지원형
+    /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적 시스템 사용
     ///
     /// 특징:
     /// - 아군 버프/힐 우선
@@ -36,17 +37,9 @@ namespace CompanionAI_v2_2.Strategies
     {
         public override string StrategyName => "Support";
 
-        private static HashSet<string> _usedAbilityTargetPairs = new HashSet<string>();
-        private static string _lastUnitId = null;
-
         public override ActionDecision DecideAction(ActionContext ctx)
         {
             string unitId = ctx.Unit.UniqueId;
-            if (_lastUnitId != unitId)
-            {
-                _usedAbilityTargetPairs.Clear();
-                _lastUnitId = unitId;
-            }
 
             Main.Log($"[Support] {ctx.Unit.CharacterName}: HP={ctx.HPPercent:F0}%, " +
                     $"{GameAPI.GetVeilStatusString()}, {GameAPI.GetMomentumStatusString()}, " +
@@ -55,6 +48,10 @@ namespace CompanionAI_v2_2.Strategies
             // Phase 1: 긴급 자기 힐
             var healResult = TryEmergencySelfHeal(ctx);
             if (healResult != null) return healResult;
+
+            // ★ Phase 1.5: 재장전 (v2.2.30 - 탄약 없으면 필수)
+            var reloadResult = TryReload(ctx);
+            if (reloadResult != null) return reloadResult;
 
             // Phase 2: 모멘텀이 낮으면 모멘텀 생성 스킬 우선
             if (GameAPI.IsDesperateMeasures())
@@ -104,15 +101,17 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// 모멘텀 생성 스킬 사용 (War Hymn, Assign Objective 등)
+        /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적
         /// </summary>
         private ActionDecision TryUseMomentumGeneratingAbility(ActionContext ctx)
         {
+            string unitId = ctx.Unit.UniqueId;
+
             foreach (var ability in ctx.AvailableAbilities)
             {
                 if (!GameAPI.IsMomentumGeneratingAbility(ability)) continue;
                 if (!IsSafePsychicAbility(ability)) continue;
 
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
                 TargetWrapper target = null;
                 string targetId = null;
 
@@ -141,13 +140,14 @@ namespace CompanionAI_v2_2.Strategies
 
                 if (target == null || targetId == null) continue;
 
-                string pairKey = $"{abilityId}:{targetId}";
-                if (_usedAbilityTargetPairs.Contains(pairKey)) continue;
+                // 특정 타겟에 대해 최근 사용 여부 확인
+                if (AbilityUsageTracker.WasUsedOnTargetRecently(unitId, AbilityUsageTracker.GetAbilityId(ability), targetId))
+                    continue;
 
                 string reason;
                 if (GameAPI.CanUseAbilityOn(ability, target, out reason))
                 {
-                    _usedAbilityTargetPairs.Add(pairKey);
+                    AbilityUsageTracker.MarkUsedOnTarget(unitId, ability, targetId);
                     Main.Log($"[Support] MOMENTUM BOOST: {ability.Name}");
                     return ActionDecision.UseAbility(ability, target, "Momentum generating ability");
                 }
@@ -192,9 +192,12 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// 아군 버프 - ★ v2.2.1: 우선순위 Tank > DPS > 기타
+        /// ★ v2.2.28: AbilityUsageTracker로 중앙화된 추적
         /// </summary>
         private ActionDecision TryBuffAlly(ActionContext ctx)
         {
+            string unitId = ctx.Unit.UniqueId;
+
             // ★ 버프 대상 우선순위: Tank > DPS > 본인 > 기타
             var prioritizedTargets = new List<BaseUnitEntity>();
 
@@ -237,20 +240,20 @@ namespace CompanionAI_v2_2.Strategies
 
                 if (!IsSafePsychicAbility(ability)) continue;
 
-                string abilityId = ability.Blueprint?.AssetGuid?.ToString() ?? ability.Name;
-
                 foreach (var target in prioritizedTargets)
                 {
+                    // 1차: 실제 버프 상태 확인 (게임 API)
                     if (GameAPI.HasActiveBuff(target, ability)) continue;
 
-                    string pairKey = $"{abilityId}:{target.UniqueId}";
-                    if (_usedAbilityTargetPairs.Contains(pairKey)) continue;
+                    // 2차: 특정 타겟에 대해 최근 사용 여부 확인
+                    if (AbilityUsageTracker.WasUsedOnTargetRecently(unitId, AbilityUsageTracker.GetAbilityId(ability), target.UniqueId))
+                        continue;
 
                     var targetWrapper = new TargetWrapper(target);
                     string reason;
                     if (GameAPI.CanUseAbilityOn(ability, targetWrapper, out reason))
                     {
-                        _usedAbilityTargetPairs.Add(pairKey);
+                        AbilityUsageTracker.MarkUsedOnTarget(unitId, ability, target.UniqueId);
                         Main.Log($"[Support] Buff: {ability.Name} -> {target.CharacterName}");
                         return ActionDecision.UseAbility(ability, targetWrapper, $"Buff {target.CharacterName}");
                     }

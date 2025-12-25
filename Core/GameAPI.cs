@@ -3,10 +3,14 @@ using System.Collections.Generic;
 using System.Linq;
 using Kingmaker;
 using Kingmaker.EntitySystem.Entities;
+using Kingmaker.Items;
+using Kingmaker.Pathfinding;
 using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
 using Kingmaker.Utility;
+using Kingmaker.View.Covers;
 using UnityEngine;
+using static CompanionAI_v2_2.Core.AbilityDatabase;
 
 namespace CompanionAI_v2_2.Core
 {
@@ -20,6 +24,7 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// 능력을 타겟에게 사용할 수 있는지 게임에게 직접 물어봄
+        /// ★ v2.2.13: CanTargetFromNode 사용으로 LOS/위치 기반 검증 추가
         /// </summary>
         public static bool CanUseAbilityOn(AbilityData ability, TargetWrapper target, out string reason)
         {
@@ -33,12 +38,42 @@ namespace CompanionAI_v2_2.Core
 
             try
             {
+                // 기본 타겟 검증
                 AbilityData.UnavailabilityReasonType? unavailableReason;
                 bool canTarget = ability.CanTarget(target, out unavailableReason);
 
                 if (!canTarget && unavailableReason.HasValue)
                 {
                     reason = unavailableReason.Value.ToString();
+                    return false;
+                }
+
+                // ★ v2.2.13: 위치 기반 추가 검증 (LOS, 사거리 등)
+                // 게임 AI의 SingleTargetSelector.SelectTarget()이 사용하는 것과 동일한 검증
+                var caster = ability.Caster as BaseUnitEntity;
+                var targetEntity = target.Entity as BaseUnitEntity;
+
+                if (caster != null && targetEntity != null)
+                {
+                    var casterNode = caster.CurrentUnwalkableNode;
+                    var targetNode = targetEntity.CurrentUnwalkableNode;
+
+                    if (casterNode != null && targetNode != null)
+                    {
+                        int distance;
+                        LosCalculations.CoverType coverType;
+
+                        // CanTargetFromNode: 실제 게임이 사용하는 위치 기반 타겟 검증
+                        bool canTargetFromNode = ability.CanTargetFromNode(casterNode, targetNode, target, out distance, out coverType);
+
+                        if (!canTargetFromNode)
+                        {
+                            bool hasLos = coverType != LosCalculations.CoverType.Invisible;
+                            reason = hasLos ? "OutOfRange" : "NoLineOfSight";
+                            Main.LogDebug($"[GameAPI] CanTargetFromNode failed: {ability.Name} -> {targetEntity.CharacterName}, Cover={coverType}, Dist={distance}");
+                            return false;
+                        }
+                    }
                 }
 
                 return canTarget;
@@ -220,6 +255,374 @@ namespace CompanionAI_v2_2.Core
 
         #endregion
 
+        #region ★ v2.2.10: AP (Action Points) Management
+
+        /// <summary>
+        /// 유닛의 현재 AP 가져오기
+        /// </summary>
+        public static float GetCurrentAP(BaseUnitEntity unit)
+        {
+            if (unit == null) return 0f;
+            try
+            {
+                // 게임의 CombatState에서 AP 확인
+                var combatState = unit.CombatState;
+                if (combatState != null)
+                {
+                    return combatState.ActionPointsBlue;
+                }
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetCurrentAP error: {ex.Message}");
+            }
+            return 3f; // 기본 폴백
+        }
+
+        /// <summary>
+        /// 유닛의 최대 AP 가져오기
+        /// </summary>
+        public static float GetMaxAP(BaseUnitEntity unit)
+        {
+            if (unit == null) return 3f;
+            try
+            {
+                var combatState = unit.CombatState;
+                if (combatState != null)
+                {
+                    // MaxActionPoints는 일반적으로 3
+                    return 3f; // 기본 최대 AP
+                }
+            }
+            catch { }
+            return 3f;
+        }
+
+        /// <summary>
+        /// 능력의 AP 비용 가져오기
+        /// ★ v2.2.12: 게임 API 직접 사용 (AbilityData.CalculateActionPointCost)
+        /// </summary>
+        public static float GetAbilityAPCost(AbilityData ability)
+        {
+            if (ability == null) return 1f;
+            try
+            {
+                // ★ 게임의 실제 AP 비용 계산 사용
+                // RuleCalculateAbilityActionPointCost를 내부적으로 사용함
+                int cost = ability.CalculateActionPointCost();
+                Main.LogDebug($"[GameAPI] AP Cost for {ability.Name}: {cost}");
+                return cost;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetAbilityAPCost error: {ex.Message}");
+            }
+
+            // 폴백: 휴리스틱
+            try
+            {
+                string bpName = ability.Blueprint?.name?.ToLower() ?? "";
+                if (bpName.Contains("heroic") || bpName.Contains("finesthour"))
+                    return 3f;
+                if (ability.Weapon != null)
+                    return 1f;
+            }
+            catch { }
+            return 1f;
+        }
+
+        /// <summary>
+        /// 주 무기 공격 찾기 (가장 기본적인 무기 공격)
+        /// </summary>
+        public static AbilityData FindPrimaryWeaponAttack(List<AbilityData> abilities, bool preferRanged = false)
+        {
+            AbilityData bestAttack = null;
+            float lowestCost = float.MaxValue;
+
+            foreach (var ability in abilities)
+            {
+                if (ability.Weapon == null) continue;
+
+                // 재장전은 제외
+                if (AbilityDatabase.IsReload(ability)) continue;
+
+                // 수류탄 제외
+                if (CombatHelpers.IsGrenadeOrExplosive(ability)) continue;
+
+                // 원거리 선호 옵션
+                if (preferRanged && ability.IsMelee) continue;
+
+                float cost = GetAbilityAPCost(ability);
+                if (cost < lowestCost)
+                {
+                    lowestCost = cost;
+                    bestAttack = ability;
+                }
+            }
+
+            return bestAttack;
+        }
+
+        /// <summary>
+        /// 능력 사용 후 남은 AP로 공격 가능한지 확인
+        /// </summary>
+        public static bool CanAffordAbilityWithReserve(ActionContext ctx, AbilityData ability, float reservedAP)
+        {
+            if (ability == null) return false;
+            float cost = GetAbilityAPCost(ability);
+            return (ctx.CurrentAP - cost) >= reservedAP;
+        }
+
+        #endregion
+
+        #region ★ v2.2.30: Ammo Management (v2.2.31 Fix)
+
+        /// <summary>
+        /// 현재 활성 무기 가져오기 (GetFirstWeapon 로직)
+        /// ★ v2.2.31: PrimaryHand → SecondaryHand → AdditionalLimbs 순서로 확인
+        /// 파스칼 같은 Tech-Priest의 mechadendrite도 처리
+        /// </summary>
+        public static ItemEntityWeapon GetActiveWeapon(BaseUnitEntity unit)
+        {
+            if (unit == null) return null;
+
+            try
+            {
+                var body = unit.Body;
+                if (body == null) return null;
+
+                // 1. Primary Hand
+                var weapon = body.PrimaryHand?.MaybeWeapon;
+                if (weapon != null) return weapon;
+
+                // 2. Secondary Hand
+                weapon = body.SecondaryHand?.MaybeWeapon;
+                if (weapon != null) return weapon;
+
+                // 3. Additional Limbs (mechadendrites 등)
+                if (body.AdditionalLimbs != null)
+                {
+                    foreach (var limb in body.AdditionalLimbs)
+                    {
+                        if (limb?.MaybeWeapon != null)
+                            return limb.MaybeWeapon;
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetActiveWeapon error: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 무기의 현재 탄약 수 가져오기
+        /// ★ v2.2.31: GetActiveWeapon 사용 (mechadendrite 지원)
+        /// </summary>
+        public static int GetCurrentAmmo(BaseUnitEntity unit, bool secondaryWeapon = false)
+        {
+            if (unit == null) return -1;
+
+            try
+            {
+                ItemEntityWeapon weapon;
+
+                if (secondaryWeapon)
+                {
+                    weapon = unit.Body?.SecondaryHand?.MaybeWeapon;
+                }
+                else
+                {
+                    // ★ v2.2.31: GetActiveWeapon 사용
+                    weapon = GetActiveWeapon(unit);
+                }
+
+                if (weapon == null)
+                {
+                    Main.LogDebug($"[GameAPI] GetCurrentAmmo: No weapon found for {unit.CharacterName}");
+                    return -1;
+                }
+
+                // WarhammerMaxAmmo가 -1이면 탄약이 필요 없는 무기 (근접)
+                int maxAmmo = weapon.Blueprint?.WarhammerMaxAmmo ?? -1;
+                if (maxAmmo == -1)
+                {
+                    Main.LogDebug($"[GameAPI] GetCurrentAmmo: {weapon.Name} is melee (no ammo)");
+                    return -1; // 무한 탄약
+                }
+
+                Main.LogDebug($"[GameAPI] GetCurrentAmmo: {weapon.Name} = {weapon.CurrentAmmo}/{maxAmmo}");
+                return weapon.CurrentAmmo;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetCurrentAmmo error: {ex.Message}");
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// 무기의 최대 탄약 수 가져오기
+        /// ★ v2.2.31: GetActiveWeapon 사용 (mechadendrite 지원)
+        /// </summary>
+        public static int GetMaxAmmo(BaseUnitEntity unit, bool secondaryWeapon = false)
+        {
+            if (unit == null) return -1;
+
+            try
+            {
+                ItemEntityWeapon weapon;
+
+                if (secondaryWeapon)
+                {
+                    weapon = unit.Body?.SecondaryHand?.MaybeWeapon;
+                }
+                else
+                {
+                    weapon = GetActiveWeapon(unit);
+                }
+
+                if (weapon == null) return -1;
+
+                int maxAmmo = weapon.Blueprint?.WarhammerMaxAmmo ?? -1;
+                return maxAmmo;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetMaxAmmo error: {ex.Message}");
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// 재장전이 필요한지 확인
+        /// - 탄약이 0이면 필수 재장전
+        /// - 탄약이 낮으면 (25% 이하) 권장 재장전
+        /// </summary>
+        public static bool NeedsReload(BaseUnitEntity unit, bool secondaryWeapon = false)
+        {
+            int current = GetCurrentAmmo(unit, secondaryWeapon);
+            int max = GetMaxAmmo(unit, secondaryWeapon);
+
+            // 탄약이 필요 없는 무기 (-1)
+            if (current < 0 || max < 0) return false;
+
+            // 탄약이 0이면 필수
+            if (current <= 0) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// 재장전을 권장하는지 확인 (탄약 25% 이하)
+        /// </summary>
+        public static bool ShouldReload(BaseUnitEntity unit, bool secondaryWeapon = false)
+        {
+            int current = GetCurrentAmmo(unit, secondaryWeapon);
+            int max = GetMaxAmmo(unit, secondaryWeapon);
+
+            if (current < 0 || max < 0) return false;
+            if (current <= 0) return true; // 필수
+
+            // 25% 이하면 권장
+            float ratio = (float)current / max;
+            return ratio <= 0.25f;
+        }
+
+        /// <summary>
+        /// 이미 탄약이 가득 찬 상태인지 확인
+        /// </summary>
+        public static bool IsFullAmmo(BaseUnitEntity unit, bool secondaryWeapon = false)
+        {
+            int current = GetCurrentAmmo(unit, secondaryWeapon);
+            int max = GetMaxAmmo(unit, secondaryWeapon);
+
+            if (current < 0 || max < 0) return true; // 탄약 필요 없음
+            return current >= max;
+        }
+
+        /// <summary>
+        /// 재장전 스킬 찾기 (deprecated - FindAvailableReloadAbility 사용 권장)
+        /// </summary>
+        public static AbilityData FindReloadAbility(List<AbilityData> abilities)
+        {
+            return FindAvailableReloadAbility(abilities);
+        }
+
+        /// <summary>
+        /// ★ v2.2.32: 사용 가능한 재장전 스킬 찾기
+        /// 게임의 ability.IsAvailable을 직접 사용하여 탄약 체크 포함
+        /// WeaponReloadLogic.IsAvailable()이 탄약 상태를 정확히 반영함
+        /// </summary>
+        public static AbilityData FindAvailableReloadAbility(List<AbilityData> abilities)
+        {
+            foreach (var ability in abilities)
+            {
+                if (!AbilityDatabase.IsReload(ability)) continue;
+
+                try
+                {
+                    // ★ 핵심: 게임의 IsAvailable 직접 사용
+                    // WeaponReloadLogic이 탄약 체크를 처리함
+                    // 탄약 가득 → false, 탄약 부족 → true
+                    if (ability.IsAvailable)
+                    {
+                        Main.LogDebug($"[GameAPI] Reload ability available: {ability.Name}");
+                        return ability;
+                    }
+                    else
+                    {
+                        Main.LogDebug($"[GameAPI] Reload ability not available (ammo full?): {ability.Name}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Main.LogDebug($"[GameAPI] Error checking reload ability: {ex.Message}");
+                }
+            }
+
+            // GUID로 못 찾으면 이름 기반 폴백
+            foreach (var ability in abilities)
+            {
+                string bpName = ability.Blueprint?.name?.ToLower() ?? "";
+                if (!bpName.Contains("reload") && !bpName.Contains("재장전")) continue;
+
+                try
+                {
+                    if (ability.IsAvailable)
+                    {
+                        Main.LogDebug($"[GameAPI] Reload ability (name-based) available: {ability.Name}");
+                        return ability;
+                    }
+                }
+                catch { }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 탄약 상태 문자열 (디버그용)
+        /// </summary>
+        public static string GetAmmoStatusString(BaseUnitEntity unit)
+        {
+            int current = GetCurrentAmmo(unit);
+            int max = GetMaxAmmo(unit);
+
+            if (current < 0 || max < 0)
+                return "Ammo=N/A";
+
+            string status = current <= 0 ? "EMPTY" :
+                           current <= max * 0.25f ? "LOW" : "OK";
+
+            return $"Ammo={current}/{max} ({status})";
+        }
+
+        #endregion
+
         #region Ability Classification
 
         public static bool IsMeleeAbility(AbilityData ability)
@@ -295,7 +698,7 @@ namespace CompanionAI_v2_2.Core
             if (ability == null) return false;
 
             // AbilityRules 시스템 체크
-            var timing = AbilityRulesDatabase.GetTiming(ability);
+            var timing = AbilityDatabase.GetTiming(ability);
             if (timing == AbilityTiming.SelfDamage)
                 return true;
 
@@ -327,7 +730,7 @@ namespace CompanionAI_v2_2.Core
             if (ability == null) return false;
 
             // AbilityRules 시스템 체크
-            var timing = AbilityRulesDatabase.GetTiming(ability);
+            var timing = AbilityDatabase.GetTiming(ability);
             if (timing == AbilityTiming.DangerousAoE)
                 return true;
 
@@ -458,7 +861,7 @@ namespace CompanionAI_v2_2.Core
         {
             if (ability == null || enemies == null) return null;
 
-            var rule = AbilityRulesDatabase.GetRule(ability);
+            var rule = AbilityDatabase.GetRule(ability);
             float threshold = rule?.TargetHPThreshold ?? 30f;
 
             foreach (var enemy in enemies)
@@ -474,6 +877,7 @@ namespace CompanionAI_v2_2.Core
         #endregion
 
         #region ★ v2.2.9: Advanced Target Scoring System - 게임 AI 스타일 스코어링
+        // ★ v2.2.19: 공격 가능한 적만 스코어링 (LOS/Range 검증 추가)
 
         /// <summary>
         /// 타겟 점수 정보
@@ -486,16 +890,18 @@ namespace CompanionAI_v2_2.Core
             public float HPAbsoluteScore;     // 절대HP 낮을수록 높음 (마무리 쉬움)
             public float DistanceScore;       // 가까울수록 높음
             public float KillableBonus;       // 처치 가능하면 보너스
+            public bool IsHittable;           // ★ v2.2.19: 실제로 공격 가능한지
 
             public override string ToString()
             {
-                return $"{Target?.CharacterName}: Total={TotalScore:F1} (HP%={HPPercentScore:F1}, HPAbs={HPAbsoluteScore:F1}, Dist={DistanceScore:F1}, Kill={KillableBonus:F1})";
+                return $"{Target?.CharacterName}: Total={TotalScore:F1} (HP%={HPPercentScore:F1}, HPAbs={HPAbsoluteScore:F1}, Dist={DistanceScore:F1}, Kill={KillableBonus:F1}, Hit={IsHittable})";
             }
         }
 
         /// <summary>
         /// ★ 복합 스코어링으로 최적 타겟 찾기
         /// 게임 AI의 AttackEffectivenessTileScorer 참고
+        /// ★ v2.2.19: 공격 가능한 적만 선택
         /// </summary>
         public static BaseUnitEntity FindBestTarget(BaseUnitEntity unit, List<BaseUnitEntity> enemies,
             bool preferKillable = true, bool preferClose = false)
@@ -505,13 +911,23 @@ namespace CompanionAI_v2_2.Core
             var scores = ScoreAllTargets(unit, enemies);
             if (scores.Count == 0) return null;
 
+            // ★ v2.2.19: 공격 가능한 적만 필터링
+            var hittableScores = scores.Where(s => s.IsHittable).ToList();
+
+            // 공격 가능한 적이 없으면 null 반환 (이동 필요)
+            if (hittableScores.Count == 0)
+            {
+                Main.Log($"[TargetScore] No hittable targets! ({scores.Count} enemies exist but none attackable)");
+                return null;
+            }
+
             // 처치 가능한 적 우선
             if (preferKillable)
             {
-                var killable = scores.Where(s => s.KillableBonus > 0).OrderByDescending(s => s.TotalScore).FirstOrDefault();
+                var killable = hittableScores.Where(s => s.KillableBonus > 0).OrderByDescending(s => s.TotalScore).FirstOrDefault();
                 if (killable != null)
                 {
-                    Main.LogDebug($"[TargetScore] Killable target: {killable}");
+                    Main.Log($"[TargetScore] Killable hittable target: {killable}");
                     return killable.Target;
                 }
             }
@@ -519,27 +935,28 @@ namespace CompanionAI_v2_2.Core
             // 가까운 적 우선 (근접 무기용)
             if (preferClose)
             {
-                var best = scores.OrderByDescending(s => s.DistanceScore + s.HPPercentScore).FirstOrDefault();
+                var best = hittableScores.OrderByDescending(s => s.DistanceScore + s.HPPercentScore).FirstOrDefault();
                 if (best != null)
                 {
-                    Main.LogDebug($"[TargetScore] Close target: {best}");
+                    Main.Log($"[TargetScore] Close hittable target: {best}");
                     return best.Target;
                 }
             }
 
             // 기본: 총점 기준
-            var bestOverall = scores.OrderByDescending(s => s.TotalScore).FirstOrDefault();
+            var bestOverall = hittableScores.OrderByDescending(s => s.TotalScore).FirstOrDefault();
             if (bestOverall != null)
             {
-                Main.LogDebug($"[TargetScore] Best overall: {bestOverall}");
+                Main.Log($"[TargetScore] Best hittable target: {bestOverall}");
                 return bestOverall.Target;
             }
 
-            return enemies.FirstOrDefault(e => e != null && !e.LifeState.IsDead);
+            return null;  // 공격 가능한 적 없음
         }
 
         /// <summary>
         /// 모든 적에 대해 점수 계산
+        /// ★ v2.2.19: 각 적에 대해 공격 가능 여부도 체크
         /// </summary>
         public static List<TargetScore> ScoreAllTargets(BaseUnitEntity unit, List<BaseUnitEntity> enemies)
         {
@@ -558,6 +975,9 @@ namespace CompanionAI_v2_2.Core
             // 예상 피해량 (기본 무기 기준 추정)
             float estimatedDamage = EstimateBaseDamage(unit);
 
+            // ★ v2.2.19: 공격용 능력 미리 찾기
+            AbilityData attackAbility = FindAnyAttackAbility(unit);
+
             foreach (var enemy in enemies)
             {
                 if (enemy == null || enemy.LifeState.IsDead) continue;
@@ -569,6 +989,9 @@ namespace CompanionAI_v2_2.Core
                     float hpPercent = GetHPPercent(enemy);
                     int hpAbsolute = enemy.Health?.HitPointsLeft ?? 100;
                     float distance = GetDistance(unit, enemy);
+
+                    // ★ v2.2.19: 공격 가능 여부 체크 (LOS, Range)
+                    score.IsHittable = CheckIfHittable(unit, enemy, attackAbility);
 
                     // 1. HP% 점수: 낮을수록 높음 (0~100 -> 100~0)
                     score.HPPercentScore = (100f - hpPercent) / 100f * 30f;  // 최대 30점
@@ -594,6 +1017,12 @@ namespace CompanionAI_v2_2.Core
                     score.TotalScore = score.HPPercentScore + score.HPAbsoluteScore +
                                       score.DistanceScore + score.KillableBonus;
 
+                    // ★ v2.2.19: 공격 불가능하면 점수 대폭 감소 (정렬용)
+                    if (!score.IsHittable)
+                    {
+                        score.TotalScore -= 1000f;  // 공격 가능한 적보다 항상 낮게
+                    }
+
                     scores.Add(score);
                 }
                 catch (Exception ex)
@@ -603,6 +1032,103 @@ namespace CompanionAI_v2_2.Core
             }
 
             return scores;
+        }
+
+        /// <summary>
+        /// ★ v2.2.19: 유닛이 적을 공격할 수 있는지 확인 (LOS, Range)
+        /// </summary>
+        private static bool CheckIfHittable(BaseUnitEntity unit, BaseUnitEntity enemy, AbilityData attackAbility)
+        {
+            if (unit == null || enemy == null) return false;
+
+            try
+            {
+                // 공격 능력이 있으면 그걸로 체크 (가장 정확한 방법)
+                if (attackAbility != null)
+                {
+                    var targetWrapper = new TargetWrapper(enemy);
+                    string reason;
+                    bool canAttack = CanUseAbilityOn(attackAbility, targetWrapper, out reason);
+
+                    if (!canAttack)
+                    {
+                        Main.LogDebug($"[Hittable] {unit.CharacterName} -> {enemy.CharacterName}: NO ({reason})");
+                    }
+                    return canAttack;
+                }
+
+                // 공격 능력이 없으면 거리만 체크 (폴백)
+                // LOS는 게임이 자동으로 체크하므로 거리만 확인
+                float distance = GetDistance(unit, enemy);
+                bool inRange = distance <= 15f;  // 기본 무기 사거리 15m 가정
+
+                if (!inRange)
+                {
+                    Main.LogDebug($"[Hittable] {unit.CharacterName} -> {enemy.CharacterName}: OUT OF RANGE ({distance:F1}m)");
+                }
+
+                return inRange;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[Hittable] Error: {ex.Message}");
+                return true;  // 오류 시 가능하다고 가정
+            }
+        }
+
+        /// <summary>
+        /// ★ v2.2.19: 아무 공격 능력 찾기 (hittable 체크용)
+        /// ★ v2.2.20: public으로 변경 - MoveAndCast fallback에서 사용
+        /// </summary>
+        public static AbilityData FindAnyAttackAbility(BaseUnitEntity unit)
+        {
+            if (unit == null) return null;
+
+            try
+            {
+                var abilities = unit.Abilities?.RawFacts;
+                if (abilities == null) return null;
+
+                foreach (var ability in abilities)
+                {
+                    var abilityData = ability?.Data;
+                    if (abilityData == null) continue;
+
+                    // 무기 공격 우선
+                    if (abilityData.Weapon != null)
+                    {
+                        // 재장전 제외
+                        if (AbilityDatabase.IsReload(abilityData)) continue;
+                        // 수류탄 제외
+                        if (CombatHelpers.IsGrenadeOrExplosive(abilityData)) continue;
+
+                        List<string> reasons;
+                        if (IsAbilityAvailable(abilityData, out reasons))
+                        {
+                            return abilityData;
+                        }
+                    }
+                }
+
+                // 무기 공격이 없으면 공격성 능력 찾기
+                foreach (var ability in abilities)
+                {
+                    var abilityData = ability?.Data;
+                    if (abilityData == null) continue;
+
+                    if (IsOffensiveAbility(abilityData))
+                    {
+                        List<string> reasons;
+                        if (IsAbilityAvailable(abilityData, out reasons))
+                        {
+                            return abilityData;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         /// <summary>
@@ -793,8 +1319,8 @@ namespace CompanionAI_v2_2.Core
         {
             if (ability == null) return false;
 
-            var timing = AbilityRulesDatabase.GetTiming(ability);
-            var rule = AbilityRulesDatabase.GetRule(ability);
+            var timing = AbilityDatabase.GetTiming(ability);
+            var rule = AbilityDatabase.GetRule(ability);
 
             switch (timing)
             {
@@ -862,7 +1388,7 @@ namespace CompanionAI_v2_2.Core
 
             foreach (var ability in abilities)
             {
-                if (!AbilityRulesDatabase.IsProactiveBuff(ability))
+                if (!AbilityDatabase.IsProactiveBuff(ability))
                     continue;
 
                 // 이미 활성화된 버프 제외
@@ -884,7 +1410,7 @@ namespace CompanionAI_v2_2.Core
         /// </summary>
         public static List<AbilityData> FilterPostFirstActionAbilities(List<AbilityData> abilities)
         {
-            return abilities.Where(a => AbilityRulesDatabase.IsPostFirstAction(a)).ToList();
+            return abilities.Where(a => AbilityDatabase.IsPostFirstAction(a)).ToList();
         }
 
         /// <summary>
@@ -892,7 +1418,7 @@ namespace CompanionAI_v2_2.Core
         /// </summary>
         public static List<AbilityData> FilterTurnEndingAbilities(List<AbilityData> abilities)
         {
-            return abilities.Where(a => AbilityRulesDatabase.IsTurnEnding(a)).ToList();
+            return abilities.Where(a => AbilityDatabase.IsTurnEnding(a)).ToList();
         }
 
         /// <summary>
@@ -900,7 +1426,7 @@ namespace CompanionAI_v2_2.Core
         /// </summary>
         public static List<AbilityData> FilterFinisherAbilities(List<AbilityData> abilities)
         {
-            return abilities.Where(a => AbilityRulesDatabase.IsFinisher(a)).ToList();
+            return abilities.Where(a => AbilityDatabase.IsFinisher(a)).ToList();
         }
 
         #endregion
@@ -925,7 +1451,7 @@ namespace CompanionAI_v2_2.Core
             if (ability == null) return false;
 
             // AbilityRules 시스템 체크
-            var timing = AbilityRulesDatabase.GetTiming(ability);
+            var timing = AbilityDatabase.GetTiming(ability);
             if (timing == AbilityTiming.PreCombatBuff)
             {
                 string bpName = ability.Blueprint?.name?.ToLower() ?? "";
@@ -965,7 +1491,7 @@ namespace CompanionAI_v2_2.Core
             if (ability == null) return false;
 
             // AbilityRules 시스템 체크
-            if (AbilityRulesDatabase.IsRighteousFury(ability))
+            if (AbilityDatabase.IsRighteousFury(ability))
                 return true;
 
             string name = ability.Name?.ToLower() ?? "";
@@ -993,7 +1519,7 @@ namespace CompanionAI_v2_2.Core
             if (ability == null) return false;
 
             // AbilityRules 시스템 체크
-            if (AbilityRulesDatabase.IsTaunt(ability))
+            if (AbilityDatabase.IsTaunt(ability))
                 return true;
 
             string name = ability.Name?.ToLower() ?? "";
