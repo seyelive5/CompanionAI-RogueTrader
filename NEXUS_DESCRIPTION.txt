@@ -1,0 +1,60 @@
+[size=4][b]Companion AI v2.2[/b][/size]
+
+Provides role-based automatic combat decisions for party companions.
+
+[size=3][b]Features[/b][/size]
+[list]
+[*]Four strategies: Tank, DPS, Support, Balanced
+[*]Timing-aware ability usage (buffs before attacks, finishers on low HP enemies)
+[*]Ally-safe AoE checks
+[*]Automatic reload management
+[*]HP-cost ability safety checks
+[/list]
+
+[size=3][b]What This Mod Does[/b][/size]
+When enabled, companions automatically select and use abilities based on their assigned role. The mod intercepts the game's AI decision-making and applies custom logic.
+
+[size=3][b]What This Mod Does NOT Do[/b][/size]
+[list]
+[*]Does not control the player character
+[*]Does not control enemies or familiars/pets
+[*]Does not guarantee optimal play in all situations
+[/list]
+
+[size=3][b]Strategies[/b][/size]
+[list]
+[*][b]Tank[/b] - Defensive abilities, taunts, engages enemies
+[*][b]DPS[/b] - Damage priority, uses finishers on low HP targets
+[*][b]Support[/b] - Healing/buffs priority, maintains safe distance
+[*][b]Balanced[/b] - Adapts to situation
+[/list]
+
+[size=3][b]Requirements[/b][/size]
+[list]
+[*]Unity Mod Manager 0.23.0+
+[/list]
+
+[size=3][b]Installation[/b][/size]
+1. Install Unity Mod Manager
+2. Extract mod files to: [code]%LOCALAPPDATA%Low\Owlcat Games\Warhammer 40000 Rogue Trader\UnityModManager\CompanionAI_v2.2\[/code]
+
+[size=3][b]Configuration[/b][/size]
+1. Press Ctrl+F10 in-game
+2. Select CompanionAI v2.2 tab
+3. Enable AI and select strategy for each companion
+
+[size=3][b]Known Limitations[/b][/size]
+[list]
+[*]Some ability combinations may not work as expected
+[*]Unlisted abilities use fallback detection
+[*]May conflict with other AI mods
+[/list]
+
+[size=3][b]Compatibility[/b][/size]
+[list]
+[*]Tested with game version 1.2.x
+[*]Compatible with ToyBox
+[/list]
+
+[size=3][b]Source Code[/b][/size]
+[url=https://github.com/seyelive5/CompanionAI-RogueTrader]GitHub[/url]
