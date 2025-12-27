@@ -117,3 +117,71 @@ bool preferRanged = settings.Role == AIRole.DPS;  // 절대 금지!
 ### 버전 관리
 - `Info.json` 버전 업데이트 필수
 - 변경사항 주석에 버전 명시 (예: `// ★ v2.2.28:`)
+
+---
+
+## 사역마(Pet/Familiar) 시스템
+
+### 개요
+- **Overseer** 아키타입 캐릭터가 사역마를 보유
+- 사역마는 독립적으로 행동하지 않고, **주인의 명령 스킬**로 제어
+- 주인이 AP를 소모하여 사역마에게 이동/공격/버프 명령
+
+### 핵심 API (게임 소스)
+```csharp
+// 마스터 확인
+unit.IsMaster                    // true면 펫 보유
+unit.Pet                         // 펫 유닛 참조
+unit.GetOptional<UnitPartPetOwner>()?.PetType  // 펫 타입
+
+// 펫 확인
+unit.IsPet                       // true면 펫
+unit.Master                      // 마스터 유닛 참조
+
+// 능력 범위
+ability.Blueprint.AoERadius      // 버프/효과 범위
+```
+
+### 펫 타입 (PetType enum)
+| 타입 | 설명 | 전략 |
+|------|------|------|
+| `Mastiff` | 사이버-마스티프 | 공격적 - 적에게 직접 공격 명령 |
+| `Eagle` | 사이버-이글 | 교란 - 적 밀집 지역에 실명/방해 |
+| `Raven` | 사이버-레이븐 | 사이킥 지원 - 사역마 위치에서 스킬 발사 |
+| `ServoskullSwarm` | 서보-스컬 | 버프/디버프 - 아군 밀집 지역으로 이동 → 범위 버프 |
+| `Servitor` | 서비터 | (확인 필요) |
+
+### 주인이 사용하는 명령 스킬 패턴
+- `*_Support_Ability` 또는 `*_SupportAbility` 접미사
+- 예: `ServoskullPet_PrioritySignal_SupportAbility`, `MastiffPet_Apprehend_AbilitySupport`
+
+### 서보스컬 명령 스킬 GUID
+| 스킬 이름 | GUID | 설명 |
+|-----------|------|------|
+| 재배치 | `5376c2d18af1499db985fbde6d5fe1ce` | 서보스컬 이동 명령 |
+| 우선 신호 | `33aa1b047d084a9b8faf534767a3a534` | 공격 버프 |
+| 메디카 신호 | `62eeb81743734fc5b8fac71b34b14683` | 회복 버프 |
+| 도발 신호 | `a8c7d8404d104d4dad2d460ec2b470ee` | 적 도발 |
+| 외삽 | `d68b6efac32b4db7afaf7de694eab819` | 범위 확장 |
+
+### 서보스컬 AI 로직 (구현 예정)
+```
+1. 주인 턴 시작 → IsMaster && PetType == ServoskullSwarm 확인
+2. 아군 밀집 지역 계산 (버프 범위 내 최대 아군 커버)
+3. 서보스컬 현재 위치 vs 최적 위치 비교
+   - 차이가 크면 → "재배치" 스킬로 이동
+4. 버프 신호 선택 (우선 신호 > 메디카 신호 > 도발 신호)
+5. 서보스컬에게 버프 사용
+6. 남은 AP로 일반 전략 로직 수행
+```
+
+### 핵심 게임 컴포넌트
+- `UnitPartPetOwner` - 마스터의 펫 정보 (`PetUnit`, `PetType`, `HasPet`)
+- `AbilityCanTargetOnlyPetUnits` - 펫만 타겟 가능한 능력 표시
+- `WarhammerOverrideAbilityCasterPositionByPet` - 주인 스킬이 **펫 위치에서** 발동
+
+### 참조 파일 (게임 디컴파일)
+- `Code/Kingmaker/UnitLogic/Parts/UnitPartPetOwner.cs`
+- `Code/Kingmaker/EntitySystem/Entities/BaseUnitEntity.cs` (IsPet, Master, Pet)
+- `Code/Kingmaker/Designers/Mechanics/Facts/WarhammerOverrideAbilityCasterPositionByPet.cs`
+- `Kingmaker.Enums/Kingmaker/Enums/PetType.cs`

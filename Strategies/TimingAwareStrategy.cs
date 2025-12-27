@@ -64,29 +64,23 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// Phase 1.5: 재장전
-        /// ★ v2.2.63: 실제로 탄약이 비어있을 때만 재장전
+        /// ★ v2.2.64: 모든 원거리 무기 탄약 확인
         ///
-        /// 이전 문제 (v2.2.62 이전):
-        /// - ability.IsAvailable이 탄약 1발만 써도 true 반환
-        /// - 공격할 탄약이 충분한데도 재장전부터 함
+        /// 이전 문제 (v2.2.63):
+        /// - NeedsReload()가 현재 들고 있는 무기만 확인
+        /// - Pascal처럼 근접+원거리 세트가 있으면 근접 들고 있을 때 원거리 탄약 무시
         ///
-        /// 해결: GameAPI.NeedsReload()로 실제 탄약 상태 확인
-        /// - 탄약 = 0 → 필수 재장전
-        /// - 탄약 > 0 → 공격 가능, 재장전 안 함
+        /// 해결: GameAPI.NeedsReloadAnyRangedWeapon()
+        /// - 모든 무기 세트의 원거리 무기 탄약 확인
+        /// - 어느 원거리 무기든 탄약이 0이면 재장전
         /// </summary>
         protected ActionDecision TryReload(ActionContext ctx)
         {
-            // ★ v2.2.63: 먼저 실제로 재장전이 필요한지 확인
-            // NeedsReload()는 탄약이 0일 때만 true
-            if (!GameAPI.NeedsReload(ctx.Unit))
+            // ★ v2.2.64: 모든 원거리 무기 탄약 확인
+            // 근접 무기를 들고 있어도 원거리 무기에 탄약이 없으면 재장전 필요
+            if (!GameAPI.NeedsReloadAnyRangedWeapon(ctx.Unit))
             {
-                // 탄약이 있음 - 공격 가능, 재장전 불필요
-                int current = GameAPI.GetCurrentAmmo(ctx.Unit);
-                int max = GameAPI.GetMaxAmmo(ctx.Unit);
-                if (current >= 0 && max >= 0)
-                {
-                    Main.LogDebug($"[{StrategyName}] Reload skipped - ammo OK: {current}/{max}");
-                }
+                // 모든 원거리 무기에 탄약 있음 - 재장전 불필요
                 return null;
             }
 

@@ -521,6 +521,10 @@ namespace CompanionAI_v2_2.Patches
                             var abilityData = ability?.Data;
                             if (abilityData == null) continue;
 
+                            // ★ v2.2.64: 재장전은 공격이 아님 - 제외
+                            // 탄약이 비었을 때 재장전만 available하면 무한루프 발생
+                            if (AbilityDatabase.IsReload(abilityData)) continue;
+
                             // 이 무기의 공격인지 확인
                             if (abilityData.Weapon == weapon)
                             {

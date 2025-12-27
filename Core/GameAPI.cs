@@ -564,6 +564,81 @@ namespace CompanionAI_v2_2.Core
         }
 
         /// <summary>
+        /// ★ v2.2.64: 모든 원거리 무기의 탄약 확인
+        /// Pascal처럼 근접/원거리 세트를 둘 다 가진 캐릭터를 위한 함수
+        /// 현재 들고 있는 무기가 근접이어도 원거리 무기에 탄약이 없으면 true 반환
+        /// </summary>
+        public static bool NeedsReloadAnyRangedWeapon(BaseUnitEntity unit)
+        {
+            if (unit == null) return false;
+
+            try
+            {
+                var body = unit.Body;
+                if (body == null) return false;
+
+                // 현재 손에 든 무기들 체크
+                var primaryWeapon = body.PrimaryHand?.MaybeWeapon;
+                if (primaryWeapon != null && !primaryWeapon.Blueprint.IsMelee)
+                {
+                    int maxAmmo = primaryWeapon.Blueprint?.WarhammerMaxAmmo ?? -1;
+                    if (maxAmmo > 0 && primaryWeapon.CurrentAmmo <= 0)
+                    {
+                        Main.LogDebug($"[GameAPI] NeedsReloadAnyRanged: {primaryWeapon.Name} ammo=0/{maxAmmo}");
+                        return true;
+                    }
+                }
+
+                var secondaryWeapon = body.SecondaryHand?.MaybeWeapon;
+                if (secondaryWeapon != null && !secondaryWeapon.Blueprint.IsMelee)
+                {
+                    int maxAmmo = secondaryWeapon.Blueprint?.WarhammerMaxAmmo ?? -1;
+                    if (maxAmmo > 0 && secondaryWeapon.CurrentAmmo <= 0)
+                    {
+                        Main.LogDebug($"[GameAPI] NeedsReloadAnyRanged: {secondaryWeapon.Name} ammo=0/{maxAmmo}");
+                        return true;
+                    }
+                }
+
+                // 다른 무기 세트도 체크
+                var handsSets = body.HandsEquipmentSets;
+                if (handsSets != null)
+                {
+                    foreach (var set in handsSets)
+                    {
+                        var primaryInSet = set?.PrimaryHand?.MaybeWeapon;
+                        if (primaryInSet != null && !primaryInSet.Blueprint.IsMelee)
+                        {
+                            int maxAmmo = primaryInSet.Blueprint?.WarhammerMaxAmmo ?? -1;
+                            if (maxAmmo > 0 && primaryInSet.CurrentAmmo <= 0)
+                            {
+                                Main.LogDebug($"[GameAPI] NeedsReloadAnyRanged (set): {primaryInSet.Name} ammo=0/{maxAmmo}");
+                                return true;
+                            }
+                        }
+
+                        var secondaryInSet = set?.SecondaryHand?.MaybeWeapon;
+                        if (secondaryInSet != null && !secondaryInSet.Blueprint.IsMelee)
+                        {
+                            int maxAmmo = secondaryInSet.Blueprint?.WarhammerMaxAmmo ?? -1;
+                            if (maxAmmo > 0 && secondaryInSet.CurrentAmmo <= 0)
+                            {
+                                Main.LogDebug($"[GameAPI] NeedsReloadAnyRanged (set): {secondaryInSet.Name} ammo=0/{maxAmmo}");
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] NeedsReloadAnyRangedWeapon error: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 재장전을 권장하는지 확인 (탄약 25% 이하)
         /// </summary>
         public static bool ShouldReload(BaseUnitEntity unit, bool secondaryWeapon = false)
