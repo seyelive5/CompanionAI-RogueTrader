@@ -67,6 +67,11 @@ namespace CompanionAI_v2_2.Patches
         // 이유: _lastDecisionKey가 이미 ability+target 조합을 추적하므로 중복
         // 다른 안전장치: _failedTargets, _consecutiveFailures, _actionCounter
 
+        // ★ v2.2.65: 턴 시작 시 메디킷 사용 가능 여부 결정 (턴당 1회 체크)
+        // 근본적 해결: HP가 임계값 이상이면 해당 턴 전체에서 메디킷 차단
+        private static bool _medikitAllowedThisTurn = false;
+        private static string _medikitCheckedUnitId = null;
+
         // ★ v2.2.21: CastTimepointType 리플렉션 캐시
         private static FieldInfo _castTimepointField = null;
 
@@ -103,21 +108,21 @@ namespace CompanionAI_v2_2.Patches
 
                     Main.Log($"[v2.2.33] {unit.CharacterName}: CastTimepoint={castTimepoint}, IsAfterMove={isAfterMove}, IsNewDecision={isNewDecision}");
 
-                    // ★ v2.2.33: 이미 이 유닛에 대해 결정을 내린 상태에서 AfterMove면 → 게임 AI에 위임
-                    // (우리 결정 후 이동해서 타겟 선택하는 경우 등)
-                    if (!isNewDecision && isAfterMove)
-                    {
-                        Main.Log($"[v2.2.33] {unit.CharacterName}: Already decided + AfterMove - letting game AI select target");
-                        return true;  // 원본 메서드 실행!
-                    }
-
-                    // ★ v2.2.33: 새 결정이면 상태 초기화
+                    // ★ v2.2.65: 새 결정이면 상태 초기화 + 메디킷 사용 가능 여부 체크
                     if (isNewDecision)
                     {
                         _failedTargets.Clear();
                         _consecutiveFailures = 0;
                         _lastDecisionKey = null;
                         _lastDecisionFrame = 0;
+
+                        // ★ v2.2.65: 턴 시작 시 메디킷 사용 가능 여부 1회 체크
+                        _medikitCheckedUnitId = unit.UniqueId;
+                        _medikitAllowedThisTurn = CheckMedikitAllowed(unit, settings);
+                        if (!_medikitAllowedThisTurn)
+                        {
+                            Main.LogDebug($"[v2.2.65] {unit.CharacterName}: Medikit blocked for this turn (HP above threshold)");
+                        }
                     }
 
                     // ★ v2.2.33: Orchestrator 실행! (첫 번째 결정 OR BeforeMove)
@@ -155,6 +160,39 @@ namespace CompanionAI_v2_2.Patches
                     Main.LogDebug($"[v2.2.21] GetCastTimepoint error: {ex.Message}");
                 }
                 return 0;  // 기본값: BeforeMove
+            }
+
+            /// <summary>
+            /// ★ v2.2.65: 턴 시작 시 메디킷 사용 가능 여부 체크
+            /// HP가 임계값 미만이면 true, 이상이면 false
+            /// </summary>
+            private static bool CheckMedikitAllowed(BaseUnitEntity unit, CharacterSettings settings)
+            {
+                try
+                {
+                    var health = unit.Health;
+                    if (health == null) return false;
+
+                    float hpPercent = (float)health.HitPointsLeft / health.MaxHitPoints;
+                    float threshold = (settings?.HealAtHPPercent ?? 50) / 100f;
+
+                    // HP가 임계값 미만이면 메디킷 허용
+                    return hpPercent < threshold;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            /// <summary>
+            /// ★ v2.2.65: 현재 턴에서 메디킷 사용이 허용되는지 확인 (public accessor)
+            /// CastAbility_Prefix에서 사용
+            /// </summary>
+            public static bool IsMedikitAllowedThisTurn(string unitId)
+            {
+                if (_medikitCheckedUnitId != unitId) return true;  // 체크 안 된 유닛은 허용
+                return _medikitAllowedThisTurn;
             }
 
             private static Status ExecuteCustomLogic(
@@ -801,6 +839,7 @@ namespace CompanionAI_v2_2.Patches
             /// <summary>
             /// ★ v2.2.25: 메디킷 사용을 차단해야 하는지 확인 (GUID 기반)
             /// ★ v2.2.27: HealAtHPPercent 설정 반영
+            /// ★ v2.2.65: 턴 시작 시 1회 체크한 결과 사용 (무한 루프 방지)
             /// </summary>
             private static bool ShouldBlockMedikit(DecisionContext context, BaseUnitEntity caster)
             {
@@ -812,24 +851,11 @@ namespace CompanionAI_v2_2.Patches
                 if (string.IsNullOrEmpty(abilityGuid) || !MedikitGUIDs.Contains(abilityGuid))
                     return false;
 
-                // 타겟 확인
-                var target = context.AbilityTarget?.Entity as BaseUnitEntity;
-                if (target == null) return false;
-
-                // 타겟의 HP 확인
-                var health = target.Health;
-                if (health == null) return false;
-
-                float hpPercent = (float)health.HitPointsLeft / health.MaxHitPoints;
-
-                // ★ v2.2.27: 설정에서 힐 임계값 가져오기 (기본 50%)
-                var settings = Main.Settings?.GetOrCreateSettings(caster.UniqueId, caster.CharacterName);
-                float threshold = (settings?.HealAtHPPercent ?? 50) / 100f;
-
-                // HP가 임계값 이상이면 차단
-                if (hpPercent >= threshold)
+                // ★ v2.2.65: 턴 시작 시 결정된 플래그 사용
+                // 매번 HP 체크하지 않고, 턴 시작 시 1회 체크한 결과 사용
+                if (!SelectAbilityTargetPatch.IsMedikitAllowedThisTurn(caster.UniqueId))
                 {
-                    Main.Log($"[v2.2.27] {caster.CharacterName}: BLOCKED Medikit on {target.CharacterName} (HP={hpPercent:P0} >= {threshold:P0})");
+                    Main.Log($"[v2.2.65] {caster.CharacterName}: BLOCKED Medikit (not allowed this turn)");
                     return true;
                 }
 
