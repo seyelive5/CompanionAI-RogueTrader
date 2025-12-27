@@ -35,6 +35,10 @@ namespace CompanionAI_v2_2.Strategies
             var reloadResult = TryReload(ctx);
             if (reloadResult != null) return reloadResult;
 
+            // ★ Phase 1.6: 원거리 캐릭터 후퇴 (v2.2.34)
+            var retreatResult = TryRetreatFromEnemy(ctx);
+            if (retreatResult != null) return retreatResult;
+
             // Phase 2: 선제적 버프 (첫 행동 전에만)
             var buffResult = TryProactiveBuffs(ctx);
             if (buffResult != null) return buffResult;

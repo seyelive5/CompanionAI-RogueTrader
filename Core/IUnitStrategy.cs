@@ -65,6 +65,9 @@ namespace CompanionAI_v2_2.Core
         public float AvailableAPForBuffs => Math.Max(0f, CurrentAP - ReservedAPForAttack);
         public AbilityData PrimaryWeaponAttack { get; set; }  // 주 무기 공격 (AP 예약용)
 
+        // ★ v2.2.58: 통합 턴 플래너 결과
+        public TurnPlanner.TurnPlan TurnPlan { get; set; }
+
         // 설정
         public CharacterSettings Settings { get; set; }
     }

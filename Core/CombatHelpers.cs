@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using System.Linq;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.UnitLogic.Abilities;
 using UnityEngine;
+using CompanionAI_v2_2.Settings;
 
 namespace CompanionAI_v2_2.Core
 {
@@ -110,7 +112,7 @@ namespace CompanionAI_v2_2.Core
 
         /// <summary>
         /// AoE 능력 사용이 안전한지 확인
-        /// ★ v2.2.1: 반경 축소 (10f -> 3f), 1명까지 허용
+        /// ★ v2.2.34: 반경 2.5m, 아군 2명까지 허용 (완화)
         /// </summary>
         public static bool IsAoESafe(
             AbilityData ability,
@@ -120,11 +122,11 @@ namespace CompanionAI_v2_2.Core
         {
             if (!IsAoEAbility(ability)) return true;
 
-            // ★ 실제 AoE 피해 반경은 보통 2-3m
-            int alliesNear = CountAlliesNearEnemy(caster, enemy, allies, 3f);
+            // ★ v2.2.34: 반경 축소 (3f -> 2.5f), 아군 허용 증가 (1 -> 2)
+            int alliesNear = CountAlliesNearEnemy(caster, enemy, allies, 2.5f);
 
-            // 1명까지는 허용 (완벽한 상황은 드물므로)
-            return alliesNear <= 1;
+            // 2명까지 허용 (전투 상황에서 다소 피해는 감수)
+            return alliesNear <= 2;
         }
 
         /// <summary>
@@ -198,7 +200,7 @@ namespace CompanionAI_v2_2.Core
         }
 
         /// <summary>
-        /// ★ v2.2.1: AoE 공격이 효율적인지 확인
+        /// ★ v2.2.34: AoE 공격이 효율적인지 확인 (완화)
         /// - 적 2명 이상 + 아군 안전
         /// </summary>
         public static bool ShouldUseAoE(
@@ -212,9 +214,9 @@ namespace CompanionAI_v2_2.Core
 
             if (target == null) return false;
 
-            // 아군 안전성 확인 (3m 반경)
-            int alliesNear = CountAlliesNearEnemy(caster, target, allies, 3f);
-            if (alliesNear > 1) return false; // 아군 2명 이상이면 안전하지 않음
+            // ★ v2.2.34: 아군 안전성 완화 (반경 2.5m, 2명까지 허용)
+            int alliesNear = CountAlliesNearEnemy(caster, target, allies, 2.5f);
+            if (alliesNear > 2) return false; // 아군 3명 이상이면 안전하지 않음
 
             // 적 수 확인 (5m 반경) - 2명 이상이면 효율적
             int enemiesNear = CountEnemiesNearPosition(target.Position, allEnemies, 5f);
@@ -302,21 +304,23 @@ namespace CompanionAI_v2_2.Core
                     break;
 
                 case WeaponAttackType.Scatter:
-                    // 산탄/확산: 적 2명 이상 + 아군 안전할 때
-                    if (enemiesNear >= 2 && alliesNear <= 1)
+                    // ★ v2.2.34: 산탄/확산 완화 - 아군 2명까지 허용
+                    if (enemiesNear >= 2 && alliesNear <= 2)
                         priority = isWeaponAttack ? 3 : 40;
-                    else if (alliesNear > 1)
-                        priority = 200; // 아군 위험 - 사용 안함
+                    else if (alliesNear > 2)
+                        priority = 200; // 아군 3명 이상 - 사용 안함
                     else
                         priority = isWeaponAttack ? 25 : 70;
                     break;
 
                 case WeaponAttackType.Grenade:
-                    // 수류탄: 적 2명 이상 필수
-                    if (enemiesNear >= 2 && alliesNear == 0)
+                    // ★ v2.2.34: 수류탄 완화 - 아군 1명까지 허용
+                    if (enemiesNear >= 2 && alliesNear <= 1)
                         priority = 2; // 최우선 (수류탄은 효율적일 때만)
+                    else if (alliesNear > 1)
+                        priority = 300; // 아군 2명 이상 - 사용 안함
                     else
-                        priority = 300; // 비효율 - 사용 안함
+                        priority = 150; // 적 1명만 - 비효율
                     break;
 
                 case WeaponAttackType.Melee:
@@ -331,6 +335,103 @@ namespace CompanionAI_v2_2.Core
 
             return priority;
         }
+
+        #region ★ v2.2.40: RangePreference 중앙화 헬퍼
+        // ⚠️ IMPORTANT: RangePreference 로직은 반드시 이 헬퍼 함수들을 사용
+        // Role 기반 추론 금지 (예: Role==DPS → preferRanged 같은 레거시 패턴)
+
+        /// <summary>
+        /// ★ v2.2.40: 원거리 선호 여부 (Single Source of Truth)
+        /// </summary>
+        public static bool ShouldPreferRanged(CharacterSettings settings)
+        {
+            if (settings == null) return false;
+            return settings.RangePreference == RangePreference.PreferRanged ||
+                   settings.RangePreference == RangePreference.MaintainRange;
+        }
+
+        /// <summary>
+        /// ★ v2.2.40: 근접 선호 여부 (Single Source of Truth)
+        /// </summary>
+        public static bool ShouldPreferMelee(CharacterSettings settings)
+        {
+            if (settings == null) return false;
+            return settings.RangePreference == RangePreference.PreferMelee;
+        }
+
+        /// <summary>
+        /// ★ v2.2.40: 능력이 선호하는 무기 타입인지 확인
+        /// </summary>
+        public static bool IsPreferredWeaponType(AbilityData ability, RangePreference preference)
+        {
+            if (ability == null) return false;
+
+            var weaponType = GetWeaponAttackType(ability);
+            bool isRanged = weaponType == WeaponAttackType.Single ||
+                           weaponType == WeaponAttackType.Burst ||
+                           weaponType == WeaponAttackType.Scatter;
+            bool isMelee = weaponType == WeaponAttackType.Melee;
+
+            switch (preference)
+            {
+                case RangePreference.PreferRanged:
+                case RangePreference.MaintainRange:
+                    return isRanged;
+                case RangePreference.PreferMelee:
+                    return isMelee;
+                default: // Adaptive
+                    return true;
+            }
+        }
+
+        /// <summary>
+        /// ★ v2.2.40: RangePreference에 따라 능력 리스트 필터링 (중앙화)
+        /// 원거리/근접 옵션이 없으면 폴백 허용
+        /// </summary>
+        public static List<AbilityData> FilterAbilitiesByRangePreference(
+            List<AbilityData> abilities,
+            RangePreference preference)
+        {
+            if (abilities == null || abilities.Count == 0)
+                return abilities;
+
+            if (preference == RangePreference.PreferRanged || preference == RangePreference.MaintainRange)
+            {
+                var rangedOnly = abilities.Where(a => {
+                    var weaponType = GetWeaponAttackType(a);
+                    return weaponType == WeaponAttackType.Single ||
+                           weaponType == WeaponAttackType.Burst ||
+                           weaponType == WeaponAttackType.Scatter;
+                }).ToList();
+
+                if (rangedOnly.Count > 0)
+                {
+                    Main.LogDebug($"[CombatHelpers] RangeFilter: {preference} - {rangedOnly.Count} ranged (filtered {abilities.Count - rangedOnly.Count} melee)");
+                    return rangedOnly;
+                }
+                // 원거리 없으면 폴백
+                Main.LogDebug($"[CombatHelpers] No ranged abilities - fallback to all");
+            }
+            else if (preference == RangePreference.PreferMelee)
+            {
+                var meleeOnly = abilities.Where(a => {
+                    var weaponType = GetWeaponAttackType(a);
+                    return weaponType == WeaponAttackType.Melee;
+                }).ToList();
+
+                if (meleeOnly.Count > 0)
+                {
+                    Main.LogDebug($"[CombatHelpers] RangeFilter: PreferMelee - {meleeOnly.Count} melee (filtered {abilities.Count - meleeOnly.Count} ranged)");
+                    return meleeOnly;
+                }
+                // 근접 없으면 폴백
+                Main.LogDebug($"[CombatHelpers] No melee abilities - fallback to all");
+            }
+
+            return abilities;  // Adaptive: 필터 없음
+        }
+
+        #endregion
     }
 
     /// <summary>

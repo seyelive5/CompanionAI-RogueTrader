@@ -50,6 +50,10 @@ namespace CompanionAI_v2_2.Strategies
             var reloadResult = TryReload(ctx);
             if (reloadResult != null) return reloadResult;
 
+            // ★ Phase 1.6: 원거리 캐릭터 후퇴 (v2.2.34)
+            var retreatResult = TryRetreatFromEnemy(ctx);
+            if (retreatResult != null) return retreatResult;
+
             // Phase 2: Heroic Act (Momentum 175+)
             if (GameAPI.IsHeroicActAvailable())
             {
@@ -66,10 +70,21 @@ namespace CompanionAI_v2_2.Strategies
             }
 
             // Phase 4: 공격 버프 (첫 행동 전)
+            // ★ v2.2.58: TurnPlanner 통합 - 전체 상황 고려한 버프 결정
             if (!ctx.HasPerformedFirstAction)
             {
-                var buffResult = TryAttackBuffs(ctx);
-                if (buffResult != null) return buffResult;
+                // TurnPlan이 있으면 플래너 결정 따름, 없으면 기존 로직 (폴백)
+                bool shouldTryBuff = ctx.TurnPlan?.ShouldBuffFirst ?? true;
+
+                if (shouldTryBuff)
+                {
+                    var buffResult = TryAttackBuffs(ctx);
+                    if (buffResult != null) return buffResult;
+                }
+                else
+                {
+                    Main.LogDebug($"[DPS] ★ TurnPlanner: Skip buff - {ctx.TurnPlan?.Reason ?? "no plan"}");
+                }
             }
 
             // Phase 4: 공격 - ★ v2.2.9: 스코어링 기반 최적 타겟 우선

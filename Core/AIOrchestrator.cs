@@ -64,6 +64,9 @@ namespace CompanionAI_v2_2.Core
                     return (null, null);
                 }
 
+                // ★ v2.2.58: 통합 턴 플래너 호출 - 전체 턴을 분석하고 최적 계획 생성
+                ctx.TurnPlan = TurnPlanner.CreatePlan(ctx);
+
                 // 전략 가져오기
                 var strategy = StrategyFactory.GetStrategy(settings.Role);
 
@@ -154,7 +157,9 @@ namespace CompanionAI_v2_2.Core
                 ctx.MostWoundedAlly = GameAPI.FindMostWoundedAlly(unit, ctx.Allies);
 
                 // ★ v2.2.9: 스코어링 기반 최적 타겟
-                ctx.BestTarget = GameAPI.FindBestTarget(unit, ctx.Enemies);
+                // ★ v2.2.37: RangePreference 기반 타겟 우선순위
+                var rangePreference = settings?.RangePreference ?? RangePreference.Adaptive;
+                ctx.BestTarget = GameAPI.FindBestTargetWithPreference(unit, ctx.Enemies, rangePreference);
                 ctx.BestMeleeTarget = GameAPI.FindBestTargetForWeapon(unit, ctx.Enemies, isMelee: true);
                 ctx.BestRangedTarget = GameAPI.FindBestTargetForWeapon(unit, ctx.Enemies, isMelee: false);
 
@@ -175,8 +180,9 @@ namespace CompanionAI_v2_2.Core
                 ctx.CurrentAP = GameAPI.GetCurrentAP(unit);
                 ctx.MaxAP = GameAPI.GetMaxAP(unit);
 
-                // 주 무기 공격 찾기 및 AP 예약
-                bool preferRanged = settings.Role == AIRole.DPS && ctx.HasRangedWeapon;
+                // ★ v2.2.40: 주 무기 공격 찾기 - RangePreference 중앙화 헬퍼 사용
+                // (레거시: Role==DPS 기반 → 신규: settings.RangePreference 기반)
+                bool preferRanged = CombatHelpers.ShouldPreferRanged(settings) && ctx.HasRangedWeapon;
                 ctx.PrimaryWeaponAttack = GameAPI.FindPrimaryWeaponAttack(ctx.AvailableAbilities, preferRanged);
                 if (ctx.PrimaryWeaponAttack != null)
                 {

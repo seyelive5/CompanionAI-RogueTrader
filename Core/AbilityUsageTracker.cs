@@ -23,9 +23,16 @@ namespace CompanionAI_v2_2.Core
         private static readonly Dictionary<string, Dictionary<string, int>> _usageByUnit
             = new Dictionary<string, Dictionary<string, int>>();
 
+        // ★ v2.2.39: 실패한 능력 추적 (더 긴 쿨다운)
+        private static readonly Dictionary<string, Dictionary<string, int>> _failedByUnit
+            = new Dictionary<string, Dictionary<string, int>>();
+
         // 결정 사이클 내 중복 방지를 위한 프레임 윈도우
         // 60fps 기준 약 1초 (한 턴의 결정 사이클)
         private const int DEFAULT_FRAME_WINDOW = 60;
+
+        // ★ v2.2.39: 실패한 능력의 쿨다운 (약 5초 - 전체 턴 동안)
+        private const int FAILED_FRAME_WINDOW = 300;
 
         // 오래된 기록 정리 임계값 (약 15초)
         private const int CLEANUP_THRESHOLD = 900;
@@ -120,6 +127,70 @@ namespace CompanionAI_v2_2.Core
             if (ability == null) return;
             string abilityId = GetAbilityId(ability);
             MarkUsedOnTarget(unitId, abilityId, targetId);
+        }
+
+        /// <summary>
+        /// ★ v2.2.39: 능력 실패 기록
+        /// 실패한 능력은 더 긴 쿨다운 적용
+        /// </summary>
+        public static void MarkFailed(string unitId, string abilityId)
+        {
+            if (string.IsNullOrEmpty(unitId) || string.IsNullOrEmpty(abilityId))
+                return;
+
+            if (!_failedByUnit.TryGetValue(unitId, out var abilities))
+            {
+                abilities = new Dictionary<string, int>();
+                _failedByUnit[unitId] = abilities;
+            }
+
+            abilities[abilityId] = Time.frameCount;
+            Main.Log($"[UsageTracker] ★ FAILED: {abilityId} for unit {unitId} at frame {Time.frameCount}");
+        }
+
+        /// <summary>
+        /// ★ v2.2.39: 능력 실패 기록 (AbilityData 오버로드)
+        /// </summary>
+        public static void MarkFailed(string unitId, Kingmaker.UnitLogic.Abilities.AbilityData ability)
+        {
+            if (ability == null) return;
+            string abilityId = GetAbilityId(ability);
+            MarkFailed(unitId, abilityId);
+        }
+
+        /// <summary>
+        /// ★ v2.2.39: 최근에 실패했는지 확인
+        /// </summary>
+        public static bool HasFailedRecently(string unitId, string abilityId, int frameWindow = FAILED_FRAME_WINDOW)
+        {
+            if (string.IsNullOrEmpty(unitId) || string.IsNullOrEmpty(abilityId))
+                return false;
+
+            if (!_failedByUnit.TryGetValue(unitId, out var abilities))
+                return false;
+
+            if (!abilities.TryGetValue(abilityId, out int failedFrame))
+                return false;
+
+            int framesSince = Time.frameCount - failedFrame;
+            bool failedRecently = framesSince <= frameWindow;
+
+            if (failedRecently)
+            {
+                Main.LogDebug($"[UsageTracker] {abilityId} FAILED {framesSince} frames ago (cooldown {frameWindow})");
+            }
+
+            return failedRecently;
+        }
+
+        /// <summary>
+        /// ★ v2.2.39: 최근에 실패했는지 확인 (AbilityData 오버로드)
+        /// </summary>
+        public static bool HasFailedRecently(string unitId, Kingmaker.UnitLogic.Abilities.AbilityData ability)
+        {
+            if (ability == null) return false;
+            string abilityId = GetAbilityId(ability);
+            return HasFailedRecently(unitId, abilityId);
         }
 
         /// <summary>

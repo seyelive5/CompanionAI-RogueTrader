@@ -2,15 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Kingmaker;
+using Kingmaker.Blueprints;
 using Kingmaker.EntitySystem.Entities;
 using Kingmaker.Items;
 using Kingmaker.Pathfinding;
 using Kingmaker.UnitLogic.Abilities;
 using Kingmaker.UnitLogic.Abilities.Blueprints;
+using Kingmaker.UnitLogic.Abilities.Components;
+using Kingmaker.UnitLogic.Mechanics.Actions;
+using Kingmaker.UnitLogic.Buffs.Blueprints;
 using Kingmaker.Utility;
 using Kingmaker.View.Covers;
 using UnityEngine;
 using static CompanionAI_v2_2.Core.AbilityDatabase;
+using CompanionAI_v2_2.Settings;
 
 namespace CompanionAI_v2_2.Core
 {
@@ -196,7 +201,8 @@ namespace CompanionAI_v2_2.Core
         }
 
         /// <summary>
-        /// 능력에서 발생하는 버프가 이미 유닛에 활성화되어 있는지 확인
+        /// ★ v2.2.39: 능력이 적용하는 버프가 이미 유닛에 활성화되어 있는지 확인
+        /// 게임의 AbilityEffectRunAction → ContextActionApplyBuff 체인을 따라 실제 버프 추출
         /// </summary>
         public static bool HasActiveBuff(BaseUnitEntity unit, AbilityData ability)
         {
@@ -204,21 +210,62 @@ namespace CompanionAI_v2_2.Core
 
             try
             {
-                string abilityBpName = ability.Blueprint?.name ?? "";
-                if (string.IsNullOrEmpty(abilityBpName)) return false;
-
-                foreach (var buff in unit.Buffs.Enumerable)
+                // ★ v2.2.39: 능력의 실행 액션에서 버프 추출
+                var runAction = ability.Blueprint?.GetComponent<AbilityEffectRunAction>();
+                if (runAction?.Actions?.Actions != null)
                 {
-                    try
+                    foreach (var action in runAction.Actions.Actions)
                     {
-                        string buffBpName = buff.Blueprint?.name ?? "";
-                        if (!string.IsNullOrEmpty(buffBpName) && buffBpName == abilityBpName)
+                        // ContextActionApplyBuff 찾기
+                        if (action is ContextActionApplyBuff applyBuff)
                         {
-                            Main.LogDebug($"[GameAPI] Buff already active: {ability.Name} on {unit.CharacterName}");
-                            return true;
+                            var buffBlueprint = applyBuff.Buff;
+                            if (buffBlueprint == null) continue;
+
+                            // 타겟에 해당 버프가 있는지 확인
+                            var existingBuff = unit.Buffs.GetBuff(buffBlueprint);
+                            if (existingBuff != null)
+                            {
+                                // Stacking 타입 확인 - Ignore/Prolong이면 재사용 불필요
+                                var stacking = buffBlueprint.Stacking;
+                                if (stacking == StackingType.Ignore ||
+                                    stacking == StackingType.Prolong)
+                                {
+                                    Main.LogDebug($"[GameAPI] ★ Buff active ({stacking}): {buffBlueprint.name} on {unit.CharacterName}");
+                                    return true;
+                                }
+
+                                // Rank 타입이면 최대 랭크 체크
+                                if (stacking == StackingType.Rank)
+                                {
+                                    if (existingBuff.Rank >= buffBlueprint.MaxRank)
+                                    {
+                                        Main.LogDebug($"[GameAPI] ★ Buff at max rank: {buffBlueprint.name} ({existingBuff.Rank}/{buffBlueprint.MaxRank})");
+                                        return true;
+                                    }
+                                }
+                            }
                         }
                     }
-                    catch { /* 개별 버프 체크 오류 무시 */ }
+                }
+
+                // 폴백: 기존 이름 매칭 방식 (버프 컴포넌트 없는 능력용)
+                string abilityBpName = ability.Blueprint?.name ?? "";
+                if (!string.IsNullOrEmpty(abilityBpName))
+                {
+                    foreach (var buff in unit.Buffs.Enumerable)
+                    {
+                        try
+                        {
+                            string buffBpName = buff.Blueprint?.name ?? "";
+                            if (!string.IsNullOrEmpty(buffBpName) && buffBpName == abilityBpName)
+                            {
+                                Main.LogDebug($"[GameAPI] Buff already active (name match): {ability.Name} on {unit.CharacterName}");
+                                return true;
+                            }
+                        }
+                        catch { /* 개별 버프 체크 오류 무시 */ }
+                    }
                 }
 
                 return false;
@@ -679,11 +726,63 @@ namespace CompanionAI_v2_2.Core
             catch { return false; }
         }
 
+        /// <summary>
+        /// ★ v2.2.48: 능력 사거리 가져오기
+        ///
+        /// 게임 AI 분석 결과 (AbilityInfo.cs, AttackEffectivenessTileScorer.cs):
+        /// - effectiveRange = ability.Weapon?.AttackOptimalRange ?? ability.RangeCells
+        /// - 무기 있음: Weapon.AttackOptimalRange 사용 (정확한 값)
+        /// - 무기 없음 (사이킥): RangeCells = 100000 (Unlimited)
+        /// - 게임 AI도 Unlimited일 때 ClosinessScore ≈ 0.999로 거의 동일 → Cover/Threat가 결정
+        ///
+        /// 따라서 Unlimited 능력은 range 대신 LOS+Cover+SafeDistance로 위치 결정해야 함
+        /// </summary>
         public static int GetAbilityRange(AbilityData ability)
         {
             if (ability == null) return 0;
-            try { return ability.RangeCells; }
+            try
+            {
+                // ★ 게임 AI와 동일한 로직: Weapon.AttackOptimalRange 우선
+                if (ability.Weapon != null)
+                {
+                    int optimalRange = ability.Weapon.AttackOptimalRange;
+                    if (optimalRange > 0 && optimalRange < 10000)
+                    {
+                        Main.LogDebug($"[GameAPI] {ability.Name}: Using weapon optimal range {optimalRange} cells");
+                        return optimalRange;
+                    }
+
+                    // AttackOptimalRange 없으면 AttackRange
+                    int attackRange = ability.Weapon.AttackRange;
+                    if (attackRange > 0 && attackRange < 10000)
+                    {
+                        Main.LogDebug($"[GameAPI] {ability.Name}: Using weapon attack range {attackRange} cells");
+                        return attackRange;
+                    }
+                }
+
+                int range = ability.RangeCells;
+
+                // Unlimited (100000) → 특수 값 반환
+                // 호출자가 이 값을 보고 range 기반 위치 계산 대신 LOS+Cover 기반으로 전환해야 함
+                if (range >= 10000)
+                {
+                    Main.LogDebug($"[GameAPI] {ability.Name}: Unlimited range (100000) - use LOS+Cover based positioning");
+                    return 100000;  // 원본 값 그대로 반환 - 호출자가 처리
+                }
+
+                return range;
+            }
             catch { return 0; }
+        }
+
+        /// <summary>
+        /// ★ v2.2.48: 능력이 Unlimited 사거리인지 확인
+        /// Unlimited 능력은 range 기반 위치 계산이 무의미 → LOS+Cover 기반 사용
+        /// </summary>
+        public static bool IsUnlimitedRange(AbilityData ability)
+        {
+            return GetAbilityRange(ability) >= 10000;
         }
 
         #endregion
@@ -957,8 +1056,9 @@ namespace CompanionAI_v2_2.Core
         /// <summary>
         /// 모든 적에 대해 점수 계산
         /// ★ v2.2.19: 각 적에 대해 공격 가능 여부도 체크
+        /// ★ v2.2.41: RangePreference 파라미터 추가 - 선호 무기로 공격 가능 여부 체크
         /// </summary>
-        public static List<TargetScore> ScoreAllTargets(BaseUnitEntity unit, List<BaseUnitEntity> enemies)
+        public static List<TargetScore> ScoreAllTargets(BaseUnitEntity unit, List<BaseUnitEntity> enemies, Settings.RangePreference rangePreference = Settings.RangePreference.Adaptive)
         {
             var scores = new List<TargetScore>();
             if (unit == null || enemies == null) return scores;
@@ -975,8 +1075,8 @@ namespace CompanionAI_v2_2.Core
             // 예상 피해량 (기본 무기 기준 추정)
             float estimatedDamage = EstimateBaseDamage(unit);
 
-            // ★ v2.2.19: 공격용 능력 미리 찾기
-            AbilityData attackAbility = FindAnyAttackAbility(unit);
+            // ★ v2.2.41: RangePreference를 전달하여 선호 무기로 공격 가능 여부 체크
+            AbilityData attackAbility = FindAnyAttackAbility(unit, rangePreference);
 
             foreach (var enemy in enemies)
             {
@@ -1017,6 +1117,24 @@ namespace CompanionAI_v2_2.Core
                     score.TotalScore = score.HPPercentScore + score.HPAbsoluteScore +
                                       score.DistanceScore + score.KillableBonus;
 
+                    // ★ v2.2.41: RangePreference adjustment 통합
+                    float adjustment = 0f;
+                    if (rangePreference == Settings.RangePreference.PreferRanged || rangePreference == Settings.RangePreference.MaintainRange)
+                    {
+                        if (distance > 5f)
+                            adjustment = 20f;
+                        else if (distance < 3f)
+                            adjustment = -30f;
+
+                        Main.LogDebug($"[TargetScore] {enemy.CharacterName}: RangedPref adjustment {adjustment:+0;-0;0} (dist={distance:F1}m)");
+                    }
+                    else if (rangePreference == Settings.RangePreference.PreferMelee)
+                    {
+                        adjustment = Math.Max(0f, (10f - distance) * 3f);
+                        Main.LogDebug($"[TargetScore] {enemy.CharacterName}: MeleePref adjustment {adjustment:+0;-0;0} (dist={distance:F1}m)");
+                    }
+                    score.TotalScore += adjustment;
+
                     // ★ v2.2.19: 공격 불가능하면 점수 대폭 감소 (정렬용)
                     if (!score.IsHittable)
                     {
@@ -1032,6 +1150,43 @@ namespace CompanionAI_v2_2.Core
             }
 
             return scores;
+        }
+
+        /// <summary>
+        /// ★ v2.2.37: RangePreference를 고려한 최적 타겟 찾기
+        /// </summary>
+        public static BaseUnitEntity FindBestTargetWithPreference(BaseUnitEntity unit, List<BaseUnitEntity> enemies, RangePreference rangePreference)
+        {
+            if (unit == null || enemies == null || enemies.Count == 0) return null;
+
+            var scores = ScoreAllTargets(unit, enemies, rangePreference);
+            if (scores.Count == 0) return null;
+
+            // 공격 가능한 적만 필터링
+            var hittableScores = scores.Where(s => s.IsHittable).ToList();
+            if (hittableScores.Count == 0)
+            {
+                Main.Log($"[TargetScore] No hittable targets with {rangePreference}!");
+                return null;
+            }
+
+            // 처치 가능한 적 우선
+            var killable = hittableScores.Where(s => s.KillableBonus > 0).OrderByDescending(s => s.TotalScore).FirstOrDefault();
+            if (killable != null)
+            {
+                Main.Log($"[TargetScore] ★ {rangePreference} killable: {killable}");
+                return killable.Target;
+            }
+
+            // 총점 기준
+            var bestOverall = hittableScores.OrderByDescending(s => s.TotalScore).FirstOrDefault();
+            if (bestOverall != null)
+            {
+                Main.Log($"[TargetScore] ★ {rangePreference} best: {bestOverall}");
+                return bestOverall.Target;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -1079,8 +1234,9 @@ namespace CompanionAI_v2_2.Core
         /// <summary>
         /// ★ v2.2.19: 아무 공격 능력 찾기 (hittable 체크용)
         /// ★ v2.2.20: public으로 변경 - MoveAndCast fallback에서 사용
+        /// ★ v2.2.40: RangePreference 파라미터 추가 (중앙화)
         /// </summary>
-        public static AbilityData FindAnyAttackAbility(BaseUnitEntity unit)
+        public static AbilityData FindAnyAttackAbility(BaseUnitEntity unit, Settings.RangePreference rangePreference = Settings.RangePreference.Adaptive)
         {
             if (unit == null) return null;
 
@@ -1089,25 +1245,47 @@ namespace CompanionAI_v2_2.Core
                 var abilities = unit.Abilities?.RawFacts;
                 if (abilities == null) return null;
 
+                // ★ v2.2.40: 선호하는 무기 타입 먼저 찾기
+                AbilityData preferredAttack = null;
+                AbilityData fallbackAttack = null;
+
                 foreach (var ability in abilities)
                 {
                     var abilityData = ability?.Data;
                     if (abilityData == null) continue;
 
-                    // 무기 공격 우선
-                    if (abilityData.Weapon != null)
-                    {
-                        // 재장전 제외
-                        if (AbilityDatabase.IsReload(abilityData)) continue;
-                        // 수류탄 제외
-                        if (CombatHelpers.IsGrenadeOrExplosive(abilityData)) continue;
+                    // 무기 공격만
+                    if (abilityData.Weapon == null) continue;
+                    // 재장전 제외
+                    if (AbilityDatabase.IsReload(abilityData)) continue;
+                    // 수류탄 제외
+                    if (CombatHelpers.IsGrenadeOrExplosive(abilityData)) continue;
 
-                        List<string> reasons;
-                        if (IsAbilityAvailable(abilityData, out reasons))
-                        {
-                            return abilityData;
-                        }
+                    List<string> reasons;
+                    if (!IsAbilityAvailable(abilityData, out reasons)) continue;
+
+                    // ★ v2.2.40: RangePreference에 맞는 무기 우선
+                    if (CombatHelpers.IsPreferredWeaponType(abilityData, rangePreference))
+                    {
+                        preferredAttack = abilityData;
+                        break;  // 선호 타입 발견 → 즉시 사용
                     }
+                    else if (fallbackAttack == null)
+                    {
+                        fallbackAttack = abilityData;  // 폴백용 저장
+                    }
+                }
+
+                // 선호 타입이 있으면 사용, 없으면 폴백
+                if (preferredAttack != null)
+                {
+                    Main.LogDebug($"[GameAPI] FindAnyAttackAbility: Found preferred ({rangePreference}) attack: {preferredAttack.Name}");
+                    return preferredAttack;
+                }
+                if (fallbackAttack != null)
+                {
+                    Main.LogDebug($"[GameAPI] FindAnyAttackAbility: No preferred, using fallback: {fallbackAttack.Name}");
+                    return fallbackAttack;
                 }
 
                 // 무기 공격이 없으면 공격성 능력 찾기
@@ -1427,6 +1605,224 @@ namespace CompanionAI_v2_2.Core
         public static List<AbilityData> FilterFinisherAbilities(List<AbilityData> abilities)
         {
             return abilities.Where(a => AbilityDatabase.IsFinisher(a)).ToList();
+        }
+
+        #endregion
+
+        #region ★ v2.2.34: Retreat & Cover System
+
+        /// <summary>
+        /// ★ v2.2.43: 유닛의 적 목록 가져오기
+        /// </summary>
+        public static List<BaseUnitEntity> GetEnemies(BaseUnitEntity unit)
+        {
+            var enemies = new List<BaseUnitEntity>();
+            if (unit == null) return enemies;
+
+            try
+            {
+                var allUnits = Game.Instance?.State?.AllBaseAwakeUnits;
+                if (allUnits == null) return enemies;
+
+                foreach (var other in allUnits)
+                {
+                    if (other == null || other == unit) continue;
+                    if (other.LifeState.IsDead) continue;
+                    if (!other.IsPlayerEnemy && unit.Faction.IsPlayer) continue;
+                    if (other.IsPlayerEnemy == unit.IsPlayerEnemy) continue;
+
+                    enemies.Add(other);
+                }
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetEnemies error: {ex.Message}");
+            }
+
+            return enemies;
+        }
+
+        /// <summary>
+        /// 가장 가까운 적과의 거리 계산
+        /// </summary>
+        public static float GetNearestEnemyDistance(BaseUnitEntity unit, List<BaseUnitEntity> enemies)
+        {
+            if (unit == null || enemies == null || enemies.Count == 0)
+                return float.MaxValue;
+
+            float minDistance = float.MaxValue;
+            foreach (var enemy in enemies)
+            {
+                if (enemy == null || enemy.LifeState.IsDead) continue;
+                float dist = GetDistance(unit, enemy);
+                if (dist < minDistance)
+                    minDistance = dist;
+            }
+
+            return minDistance;
+        }
+
+        /// <summary>
+        /// 위치의 Cover 타입 가져오기
+        /// </summary>
+        public static LosCalculations.CoverType GetCoverTypeAtPosition(Vector3 position, List<BaseUnitEntity> enemies)
+        {
+            if (enemies == null || enemies.Count == 0)
+                return LosCalculations.CoverType.None;
+
+            try
+            {
+                // 가장 좋은 Cover 찾기 (적들 기준)
+                var bestCover = LosCalculations.CoverType.None;
+
+                foreach (var enemy in enemies)
+                {
+                    if (enemy == null || enemy.LifeState.IsDead) continue;
+
+                    // 적 -> 위치 방향으로 Cover 계산
+                    var cover = LosCalculations.GetCoverType(position);
+                    if (cover > bestCover)
+                        bestCover = cover;
+                }
+
+                return bestCover;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] GetCoverTypeAtPosition error: {ex.Message}");
+                return LosCalculations.CoverType.None;
+            }
+        }
+
+        /// <summary>
+        /// 후퇴 가능한 위치 찾기
+        /// - 적과의 거리가 minDistance 이상
+        /// - seekCover가 true면 Cover 있는 위치 우선
+        /// ★ v2.2.34: 원거리 캐릭터 후퇴용
+        /// </summary>
+        public static Vector3? FindRetreatPosition(
+            BaseUnitEntity unit,
+            List<BaseUnitEntity> enemies,
+            float minDistance,
+            bool seekCover = true)
+        {
+            if (unit == null || enemies == null || enemies.Count == 0)
+                return null;
+
+            try
+            {
+                // 현재 위치
+                Vector3 currentPos = unit.Position;
+
+                // 적들의 중심점 계산
+                Vector3 enemyCenter = Vector3.zero;
+                int enemyCount = 0;
+                foreach (var enemy in enemies)
+                {
+                    if (enemy == null || enemy.LifeState.IsDead) continue;
+                    enemyCenter += enemy.Position;
+                    enemyCount++;
+                }
+                if (enemyCount == 0) return null;
+                enemyCenter /= enemyCount;
+
+                // 적 중심에서 반대 방향으로 후퇴
+                Vector3 retreatDirection = (currentPos - enemyCenter).normalized;
+                if (retreatDirection == Vector3.zero)
+                    retreatDirection = Vector3.back; // 기본 방향
+
+                // 후보 위치들 생성 (부채꼴 형태로 탐색)
+                var candidates = new List<(Vector3 pos, float score)>();
+
+                // 이동 가능 거리 (AP 기반 추정)
+                float moveRange = unit.CombatState?.ActionPointsBlue * 3f ?? 9f;
+                moveRange = Mathf.Clamp(moveRange, 3f, 15f);
+
+                // 여러 방향으로 탐색
+                for (int angle = -60; angle <= 60; angle += 30)
+                {
+                    for (float dist = 3f; dist <= moveRange; dist += 3f)
+                    {
+                        // 회전된 방향
+                        Vector3 rotatedDir = Quaternion.Euler(0, angle, 0) * retreatDirection;
+                        Vector3 candidatePos = currentPos + rotatedDir * dist;
+
+                        // 점수 계산
+                        float score = 0f;
+
+                        // 1. 적과의 최소 거리 (더 멀수록 좋음)
+                        float nearestEnemyDist = float.MaxValue;
+                        foreach (var enemy in enemies)
+                        {
+                            if (enemy == null || enemy.LifeState.IsDead) continue;
+                            float d = Vector3.Distance(candidatePos, enemy.Position);
+                            if (d < nearestEnemyDist) nearestEnemyDist = d;
+                        }
+
+                        // minDistance 미달이면 제외
+                        if (nearestEnemyDist < minDistance) continue;
+
+                        score += nearestEnemyDist * 2f; // 거리 점수
+
+                        // 2. Cover 점수 (seekCover가 true일 때)
+                        if (seekCover)
+                        {
+                            var coverType = GetCoverTypeAtPosition(candidatePos, enemies);
+                            switch (coverType)
+                            {
+                                case LosCalculations.CoverType.Full:
+                                    score += 30f;
+                                    break;
+                                case LosCalculations.CoverType.Half:
+                                    score += 15f;
+                                    break;
+                                case LosCalculations.CoverType.Invisible:
+                                    score += 50f; // 최고점
+                                    break;
+                            }
+                        }
+
+                        // 3. 이동 거리 패널티 (가까울수록 좋음)
+                        score -= dist * 0.5f;
+
+                        candidates.Add((candidatePos, score));
+                    }
+                }
+
+                if (candidates.Count == 0)
+                {
+                    Main.Log($"[Retreat] No valid retreat position found for {unit.CharacterName}");
+                    return null;
+                }
+
+                // 최고 점수 위치 선택
+                var best = candidates.OrderByDescending(c => c.score).First();
+                Main.Log($"[Retreat] {unit.CharacterName} retreating to {best.pos} (score={best.score:F1})");
+
+                return best.pos;
+            }
+            catch (Exception ex)
+            {
+                Main.LogDebug($"[GameAPI] FindRetreatPosition error: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 후퇴가 필요한지 확인
+        /// - RangePreference가 PreferRanged 또는 MaintainRange
+        /// - 가장 가까운 적이 MinSafeDistance 이내
+        /// </summary>
+        public static bool ShouldRetreat(BaseUnitEntity unit, List<BaseUnitEntity> enemies,
+            Settings.RangePreference rangePreference, float minSafeDistance)
+        {
+            // 원거리 선호가 아니면 후퇴 불필요
+            if (rangePreference != Settings.RangePreference.PreferRanged &&
+                rangePreference != Settings.RangePreference.MaintainRange)
+                return false;
+
+            float nearestDist = GetNearestEnemyDistance(unit, enemies);
+            return nearestDist <= minSafeDistance;
         }
 
         #endregion

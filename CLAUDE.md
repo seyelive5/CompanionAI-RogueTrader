@@ -25,6 +25,20 @@ CompanionAI_v2.2/
 
 # Claude 행동 방침
 
+## ⚠️ 최우선 규칙: 대화 시작/리셋 시 전체 코드 파악
+
+**대화가 리셋되거나 새로 시작될 때, 수정 제안 전에 반드시:**
+1. 핵심 파일들을 먼저 읽고 전체 아키텍처 파악
+2. 특히 무한 루프 방지 메커니즘들의 상호작용 이해
+3. 이전에 시도했다가 문제가 된 접근법 확인 (프레임 기반 등)
+4. 기존 안전장치들이 왜 존재하는지 이유 파악
+
+**핵심 파일 목록:**
+- `CustomAIPatch.cs` - 무한 루프 방지 메커니즘들
+- `AbilityUsageTracker.cs` - 중앙화된 스킬 추적
+- `AIOrchestrator.cs` - 전체 AI 흐름
+- `TimingAwareStrategy.cs` - 전략 베이스 클래스
+
 ## 핵심 원칙: "나무를 보지 말고 숲을 봐라"
 
 ### 적극적 문제 해결
@@ -75,6 +89,30 @@ CompanionAI_v2.2/
 - 모든 전략은 `TimingAwareStrategy` 상속
 - Phase 기반 우선순위 결정
 - `AbilityUsageTracker`로 중앙화된 추적
+
+### ⚠️ RangePreference 규칙 (v2.2.40+)
+**Single Source of Truth: `CombatHelpers.cs`의 헬퍼 함수 사용 필수**
+
+```csharp
+// ✅ 올바른 방법
+bool preferRanged = CombatHelpers.ShouldPreferRanged(settings);
+var filtered = CombatHelpers.FilterAbilitiesByRangePreference(abilities, pref);
+bool isPreferred = CombatHelpers.IsPreferredWeaponType(ability, pref);
+
+// ❌ 금지 - Role 기반 추론 (레거시 패턴)
+bool preferRanged = settings.Role == AIRole.DPS;  // 절대 금지!
+```
+
+**적용 위치:**
+- `AIOrchestrator.cs` - PrimaryWeaponAttack 선택
+- `TimingAwareStrategy.cs` - 공격 능력 필터링
+- `CustomAIPatch.cs` - 폴백 능력 선택
+- `GameAPI.cs` - FindAnyAttackAbility() 호출 시
+
+**원칙:**
+- RangePreference는 Role과 독립적인 설정
+- Support + PreferRanged, Tank + PreferRanged 모두 가능
+- 새로운 능력 선택 코드 작성 시 반드시 헬퍼 함수 사용
 
 ### 버전 관리
 - `Info.json` 버전 업데이트 필수

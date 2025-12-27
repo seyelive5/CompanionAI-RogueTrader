@@ -64,32 +64,46 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// Phase 1.5: 재장전
-        /// ★ v2.2.32: "숲을 보는" 접근 - 게임의 판단을 신뢰
+        /// ★ v2.2.63: 실제로 탄약이 비어있을 때만 재장전
         ///
-        /// 핵심: 우리가 탄약을 직접 체크하지 않음!
-        /// 재장전 능력의 IsAvailable이 이미 탄약 체크를 포함함.
-        /// 게임이 "재장전 가능"이라고 하면 재장전 필요.
+        /// 이전 문제 (v2.2.62 이전):
+        /// - ability.IsAvailable이 탄약 1발만 써도 true 반환
+        /// - 공격할 탄약이 충분한데도 재장전부터 함
+        ///
+        /// 해결: GameAPI.NeedsReload()로 실제 탄약 상태 확인
+        /// - 탄약 = 0 → 필수 재장전
+        /// - 탄약 > 0 → 공격 가능, 재장전 안 함
         /// </summary>
         protected ActionDecision TryReload(ActionContext ctx)
         {
-            // ★ 핵심: 재장전 능력이 "사용 가능"한지만 확인
-            // 게임의 WeaponReloadLogic.IsAvailable()이 탄약 체크를 처리함
-            // - 탄약 가득 → 재장전 능력 사용 불가 → null 반환
-            // - 탄약 부족 → 재장전 능력 사용 가능 → 능력 반환
+            // ★ v2.2.63: 먼저 실제로 재장전이 필요한지 확인
+            // NeedsReload()는 탄약이 0일 때만 true
+            if (!GameAPI.NeedsReload(ctx.Unit))
+            {
+                // 탄약이 있음 - 공격 가능, 재장전 불필요
+                int current = GameAPI.GetCurrentAmmo(ctx.Unit);
+                int max = GameAPI.GetMaxAmmo(ctx.Unit);
+                if (current >= 0 && max >= 0)
+                {
+                    Main.LogDebug($"[{StrategyName}] Reload skipped - ammo OK: {current}/{max}");
+                }
+                return null;
+            }
+
+            // 탄약이 0 - 재장전 필요
             var reloadAbility = GameAPI.FindAvailableReloadAbility(ctx.AvailableAbilities);
 
             if (reloadAbility == null)
             {
-                // 재장전 능력이 없거나 사용 불가 (탄약 가득 포함)
+                Main.LogDebug($"[{StrategyName}] Need reload but no reload ability found!");
                 return null;
             }
 
-            // 재장전 능력이 사용 가능 = 게임이 "재장전 필요"하다고 판단
             var target = new TargetWrapper(ctx.Unit);
             string reason;
             if (GameAPI.CanUseAbilityOn(reloadAbility, target, out reason))
             {
-                Main.Log($"[{StrategyName}] ★ RELOAD: {reloadAbility.Name}");
+                Main.Log($"[{StrategyName}] ★ RELOAD (ammo empty): {reloadAbility.Name}");
                 return ActionDecision.UseAbility(reloadAbility, target, "Reload");
             }
             else
@@ -323,6 +337,9 @@ namespace CompanionAI_v2_2.Strategies
 
             // ★ v2.2.26: RangePreference 적용
             var rangePreference = ctx.Settings?.RangePreference ?? RangePreference.Adaptive;
+
+            // ★ v2.2.37: 하드 무기 필터 적용 (원거리/근접 분리)
+            attacks = FilterByRangePreference(attacks, rangePreference);
 
             // 우선순위별로 공격 정렬 (타겟 기준 + RangePreference 가중치)
             var prioritizedAttacks = attacks
@@ -579,6 +596,55 @@ namespace CompanionAI_v2_2.Strategies
         }
 
         /// <summary>
+        /// ★ v2.2.37: 하드 무기 필터 - RangePreference에 따라 능력 필터링
+        /// PreferRanged/MaintainRange: 원거리 능력만 (없으면 폴백)
+        /// PreferMelee: 근접 능력만 (없으면 폴백)
+        /// </summary>
+        protected List<AbilityData> FilterByRangePreference(List<AbilityData> attacks, RangePreference preference)
+        {
+            if (attacks == null || attacks.Count == 0)
+                return attacks;
+
+            if (preference == RangePreference.PreferRanged || preference == RangePreference.MaintainRange)
+            {
+                // 원거리 능력만 필터
+                var rangedOnly = attacks.Where(a => {
+                    var weaponType = CombatHelpers.GetWeaponAttackType(a);
+                    return weaponType == WeaponAttackType.Single ||
+                           weaponType == WeaponAttackType.Burst ||
+                           weaponType == WeaponAttackType.Scatter ||
+                           weaponType == WeaponAttackType.Grenade;
+                }).ToList();
+
+                if (rangedOnly.Count > 0)
+                {
+                    Main.LogDebug($"[{StrategyName}] ★ HARD FILTER: {preference} - {rangedOnly.Count} ranged abilities (filtered {attacks.Count - rangedOnly.Count} melee)");
+                    return rangedOnly;
+                }
+                // 원거리 없으면 근접 허용 (폴백)
+                Main.LogDebug($"[{StrategyName}] No ranged abilities - fallback to melee");
+            }
+            else if (preference == RangePreference.PreferMelee)
+            {
+                // 근접 능력만 필터
+                var meleeOnly = attacks.Where(a => {
+                    var weaponType = CombatHelpers.GetWeaponAttackType(a);
+                    return weaponType == WeaponAttackType.Melee;
+                }).ToList();
+
+                if (meleeOnly.Count > 0)
+                {
+                    Main.LogDebug($"[{StrategyName}] ★ HARD FILTER: PreferMelee - {meleeOnly.Count} melee abilities (filtered {attacks.Count - meleeOnly.Count} ranged)");
+                    return meleeOnly;
+                }
+                // 근접 없으면 원거리 허용 (폴백)
+                Main.LogDebug($"[{StrategyName}] No melee abilities - fallback to ranged");
+            }
+
+            return attacks;  // Adaptive: 필터 없음
+        }
+
+        /// <summary>
         /// ★ v2.2.26: RangePreference에 따른 무기 타입 페널티 계산
         /// 페널티가 낮을수록 우선순위가 높음
         /// WeaponAttackType: Melee=근접, Single/Burst/Scatter=원거리
@@ -648,6 +714,55 @@ namespace CompanionAI_v2_2.Strategies
         }
 
         /// <summary>
+        /// ★ v2.2.34: 원거리 캐릭터 후퇴 플래그 설정
+        /// ★ v2.2.35: Move 반환 대신 null 반환 → SetupMoveCommandPatch가 ToClosestEnemy 차단
+        /// ★ v2.2.58: TurnPlanner 통합 - 전체 상황을 고려한 후퇴 결정
+        ///
+        /// ActionDecision.Move는 mod 아키텍처에서 지원되지 않음!
+        /// 대신 로그만 남기고 null 반환 → 전략이 계속 진행 → 공격 시도
+        /// SetupMoveCommandPatch에서 ToClosestEnemy 차단 → 적에게 돌진 방지
+        /// </summary>
+        protected ActionDecision TryRetreatFromEnemy(ActionContext ctx)
+        {
+            // 이동 불가면 스킵
+            if (!ctx.CanMove) return null;
+
+            // ★ v2.2.58: TurnPlanner가 후퇴를 권장하면 후퇴
+            if (ctx.TurnPlan?.ShouldRetreat == true)
+            {
+                Main.Log($"[{StrategyName}] ★ TurnPlanner RETREAT: {ctx.Unit.CharacterName} - {ctx.TurnPlan.Reason}");
+                // null 반환 → SetupMoveCommandPatch에서 ToClosestEnemy 차단됨
+                return null;
+            }
+
+            // RangePreference 확인
+            var rangePreference = ctx.Settings?.RangePreference ?? RangePreference.Adaptive;
+            if (rangePreference != RangePreference.PreferRanged &&
+                rangePreference != RangePreference.MaintainRange)
+            {
+                return null; // 원거리 선호 아니면 후퇴 불필요
+            }
+
+            // 가장 가까운 적과의 거리 확인
+            float minSafeDistance = ctx.Settings?.MinSafeDistance ?? 5f;
+            float nearestEnemyDist = GameAPI.GetNearestEnemyDistance(ctx.Unit, ctx.Enemies);
+
+            if (nearestEnemyDist > minSafeDistance)
+            {
+                return null; // 이미 안전 거리 밖
+            }
+
+            // ★ v2.2.35: Move 반환 대신 로그만 남기고 null 반환
+            // SetupMoveCommandPatch에서 ToClosestEnemy 차단됨
+            // 전략은 계속 진행되어 현재 위치에서 공격 시도
+            Main.Log($"[{StrategyName}] ★ RETREAT NEEDED: {ctx.Unit.CharacterName} (enemy at {nearestEnemyDist:F1}m < {minSafeDistance}m safe dist) - will attack from current position");
+
+            // null 반환 → 다음 phase로 진행 (공격 시도)
+            // ToClosestEnemy는 SetupMoveCommandPatch에서 차단됨
+            return null;
+        }
+
+        /// <summary>
         /// ★ v2.2.16: 이동 필요 시 게임 AI에 위임
         /// 우리 패치는 "직접 캐스트" 브랜치이므로 이동 명령 불가
         /// null 반환 시 게임의 "이동 후 공격" 로직이 처리
@@ -669,6 +784,8 @@ namespace CompanionAI_v2_2.Strategies
 
         /// <summary>
         /// Force Basic Attack 폴백 - 모든 스킬이 사용 불가할 때 기본 무기 공격
+        /// ★ v2.2.41: RangePreference 필터 적용 - 선호 무기 우선
+        /// ★ v2.2.42: 하드 필터 - 원거리 선호시 근접 폴백 완전 차단
         /// </summary>
         protected ActionDecision TryForceBasicAttack(ActionContext ctx)
         {
@@ -676,6 +793,23 @@ namespace CompanionAI_v2_2.Strategies
 
             var basicAttacks = GetBasicWeaponAttacks(ctx.AvailableAbilities);
             if (basicAttacks.Count == 0) return null;
+
+            // ★ v2.2.41: RangePreference 필터 적용 - CombatHelpers 헬퍼 사용
+            var rangePreference = ctx.Settings?.RangePreference ?? RangePreference.Adaptive;
+            basicAttacks = CombatHelpers.FilterAbilitiesByRangePreference(basicAttacks, rangePreference);
+            if (basicAttacks.Count == 0) return null;
+
+            // ★ v2.2.42: 하드 필터 - FilterAbilitiesByRangePreference가 폴백했는지 확인
+            // 원거리 선호인데 원거리 능력이 없으면 (폴백으로 근접만 있으면) 차단
+            if (rangePreference == RangePreference.PreferRanged || rangePreference == RangePreference.MaintainRange)
+            {
+                bool hasPreferredWeapon = basicAttacks.Any(a => CombatHelpers.IsPreferredWeaponType(a, rangePreference));
+                if (!hasPreferredWeapon)
+                {
+                    Main.Log($"[{StrategyName}] ★ v2.2.42 HARD BLOCK: No ranged weapons for {rangePreference} - refusing melee fallback!");
+                    return null;
+                }
+            }
 
             var targets = ctx.Enemies
                 .Where(e => e != null && !e.LifeState.IsDead)
@@ -689,7 +823,7 @@ namespace CompanionAI_v2_2.Strategies
                     string reason;
                     if (GameAPI.CanUseAbilityOn(attack, targetWrapper, out reason))
                     {
-                        Main.Log($"[{StrategyName}] ★ FORCE BASIC ATTACK: {attack.Name} -> {enemy.CharacterName}");
+                        Main.Log($"[{StrategyName}] ★ FORCE BASIC ATTACK ({rangePreference}): {attack.Name} -> {enemy.CharacterName}");
                         return ActionDecision.UseAbility(attack, targetWrapper, $"Force basic attack on {enemy.CharacterName}");
                     }
                 }

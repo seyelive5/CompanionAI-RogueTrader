@@ -53,6 +53,10 @@ namespace CompanionAI_v2_2.Strategies
             var reloadResult = TryReload(ctx);
             if (reloadResult != null) return reloadResult;
 
+            // ★ Phase 1.6: 원거리 캐릭터 후퇴 (v2.2.34) - Support는 기본적으로 후퇴 우선
+            var retreatResult = TryRetreatFromEnemy(ctx);
+            if (retreatResult != null) return retreatResult;
+
             // Phase 2: 모멘텀이 낮으면 모멘텀 생성 스킬 우선
             if (GameAPI.IsDesperateMeasures())
             {
@@ -92,9 +96,9 @@ namespace CompanionAI_v2_2.Strategies
             var basicAttackResult = TryForceBasicAttack(ctx);
             if (basicAttackResult != null) return basicAttackResult;
 
-            // Phase 11: 안전 거리 유지 - 공격 불가능할 때만
-            var retreatResult = TryMaintainDistance(ctx);
-            if (retreatResult != null) return retreatResult;
+            // Phase 11: 안전 거리 유지 (폴백) - 공격 불가능할 때만
+            var maintainResult = TryMaintainDistance(ctx);
+            if (maintainResult != null) return maintainResult;
 
             return ActionDecision.EndTurn("Supporting from distance");
         }
